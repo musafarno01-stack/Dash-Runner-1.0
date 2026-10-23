@@ -5,13 +5,14 @@ enum GameState { MENU, PLAYING, PAUSED, GAME_OVER }
 const FLOOR_Y: float = 440.0
 const PLAYER_X: float = 170.0
 const PLAYER_WIDTH: float = 34.0
-const PLAYER_HEIGHT: float = 56.0
+const PLAYER_HEIGHT: float = 58.0
 const SAVE_PATH: String = "user://neon_dash.cfg"
 
 var state: GameState = GameState.MENU
 var obstacles: Array[Dictionary] = []
 var coins: Array[Dictionary] = []
 var particles: Array[Dictionary] = []
+var player_sparks: Array[Dictionary] = []
 
 var player_bottom: float = FLOOR_Y
 var vertical_speed: float = 0.0
@@ -28,11 +29,13 @@ var world_speed: float = 380.0
 var spawn_timer: float = 1.3
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
-# Audio system
+# Audio System
 var sound_enabled: bool = true
 var audio_player: AudioStreamPlayer
 var synth_generator: AudioStreamGenerator
 var playback: AudioStreamGeneratorPlayback
+var sound_freq: float = 0.0
+var sound_timer_val: float = 0.0
 
 
 func _ready() -> void:
@@ -46,36 +49,63 @@ func _setup_audio() -> void:
 	audio_player = AudioStreamPlayer.new()
 	synth_generator = AudioStreamGenerator.new()
 	synth_generator.mix_rate = 22050
-	synth_generator.buffer_length = 0.15
+	synth_generator.buffer_length = 0.1
 	audio_player.stream = synth_generator
 	add_child(audio_player)
 	audio_player.play()
 	playback = audio_player.get_stream_playback()
 
 
-func _play_tone(freq: float, duration: float, type: String = "sine") -> void:
-	if not sound_enabled or not playback:
+func _trigger_sound(freq: float, duration: float) -> void:
+	if not sound_enabled:
 		return
-	var frames_to_generate = int(22050 * duration)
-	for i in range(frames_to_generate):
-		if playback.get_frames_available() < 1:
-			break
-		var t = float(i) / 22050.0
-		var sample = sin(t * freq * TAU)
-		if type == "square":
-			sample = 1.0 if sample > 0 else -1.0
-		elif type == "noise":
-			sample = randf_range(-1.0, 1.0)
-		sample *= max(0.0, 1.0 - (float(i) / frames_to_generate))
-		playback.push_frame(Vector2(sample * 0.18, sample * 0.18))
+	sound_freq = freq
+	sound_timer_val = duration
 
 
 func _process(delta: float) -> void:
+	# Audio buffer generation
+	if playback:
+		var frames = playback.get_frames_available()
+		for i in range(frames):
+			var sample = 0.0
+			if sound_enabled and sound_timer_val > 0.0:
+				var t = Time.get_ticks_msec() * 0.001
+				sample = sin(t * sound_freq * TAU) * 0.15
+				sound_timer_val -= 1.0 / 22050.0
+			playback.push_frame(Vector2(sample, sample))
+
+	# Zero-lag input polling
 	if state == GameState.PLAYING:
+		if Input.is_action_just_pressed("ui_accept") or Input.is_action_just_pressed("ui_up") or Input.is_key_pressed(KEY_SPACE) or Input.is_key_pressed(KEY_UP) or Input.is_key_pressed(KEY_W):
+			_jump()
+		elif Input.is_action_just_pressed("ui_down") or Input.is_key_pressed(KEY_DOWN) or Input.is_key_pressed(KEY_S):
+			_begin_slide()
+
 		_update_game(delta)
 		anim_frame += delta * (world_speed * 0.035)
 
-	# Background atmosphere dust particles
+		# Generate Thruster / Exhaust particles
+		if randf() < 0.6:
+			var px = PLAYER_X - 18.0 if not is_sliding else PLAYER_X - 26.0
+			var py = (player_bottom - PLAYER_HEIGHT + 28.0) if not is_sliding else (player_bottom - 12.0)
+			player_sparks.append({
+				"x": px,
+				"y": py + randf_range(-4.0, 4.0),
+				"vx": -randf_range(120.0, 220.0),
+				"vy": randf_range(-30.0, 30.0),
+				"life": randf_range(0.15, 0.35)
+			})
+
+	# Particle updates
+	for i in range(player_sparks.size() - 1, -1, -1):
+		var spark = player_sparks[i]
+		spark["x"] += spark["vx"] * delta
+		spark["y"] += spark["vy"] * delta
+		spark["life"] -= delta
+		if spark["life"] <= 0.0:
+			player_sparks.remove_at(i)
+
 	for i in range(particles.size() - 1, -1, -1):
 		var p = particles[i]
 		p["x"] -= (world_speed * 0.35 + p["speed_offset"]) * delta
@@ -96,36 +126,16 @@ func _process(delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		match state:
-			GameState.MENU:
-				if event.keycode == KEY_ENTER or event.keycode == KEY_SPACE:
-					_start_game()
-				elif event.keycode == KEY_M:
-					_toggle_sound()
-
-			GameState.PLAYING:
-				if event.keycode == KEY_ESCAPE or event.keycode == KEY_P:
-					state = GameState.PAUSED
-				elif event.keycode == KEY_M:
-					_toggle_sound()
-				elif event.keycode == KEY_SPACE or event.keycode == KEY_UP or event.keycode == KEY_W:
-					_jump()
-				elif event.keycode == KEY_DOWN or event.keycode == KEY_S or event.keycode == KEY_SHIFT:
-					_begin_slide()
-
-			GameState.PAUSED:
-				if event.keycode == KEY_ESCAPE or event.keycode == KEY_P:
-					state = GameState.PLAYING
-				elif event.keycode == KEY_ENTER:
-					_start_game()
-				elif event.keycode == KEY_M:
-					_toggle_sound()
-
-			GameState.GAME_OVER:
-				if event.keycode == KEY_ENTER or event.keycode == KEY_SPACE:
-					_start_game()
-				elif event.keycode == KEY_M:
-					_toggle_sound()
+		if event.keycode == KEY_M:
+			_toggle_sound()
+		elif state == GameState.MENU or state == GameState.GAME_OVER:
+			if event.keycode == KEY_ENTER or event.keycode == KEY_SPACE:
+				_start_game()
+		elif state == GameState.PAUSED:
+			if event.keycode == KEY_ESCAPE or event.keycode == KEY_P:
+				state = GameState.PLAYING
+			elif event.keycode == KEY_ENTER:
+				_start_game()
 
 	if event is InputEventScreenTouch and event.pressed:
 		_handle_click_or_tap(event.position)
@@ -136,13 +146,12 @@ func _unhandled_input(event: InputEvent) -> void:
 func _toggle_sound() -> void:
 	sound_enabled = not sound_enabled
 	if sound_enabled:
-		_play_tone(650.0, 0.1)
+		_trigger_sound(600.0, 0.12)
 
 
 func _handle_click_or_tap(pos: Vector2) -> void:
 	var screen_size: Vector2 = get_viewport_rect().size
 
-	# Audio Toggle HUD Button Hitbox
 	var sound_btn_rect = Rect2(screen_size.x - 170.0, 12.0, 150.0, 36.0)
 	if sound_btn_rect.has_point(pos):
 		_toggle_sound()
@@ -153,7 +162,7 @@ func _handle_click_or_tap(pos: Vector2) -> void:
 			_start_game()
 
 		GameState.GAME_OVER:
-			var btn_rect = Rect2(screen_size.x * 0.5 - 110.0, 310.0, 220.0, 52.0)
+			var btn_rect = Rect2(screen_size.x * 0.5 - 110.0, 300.0, 220.0, 52.0)
 			if btn_rect.has_point(pos) or pos.y > 80:
 				_start_game()
 
@@ -171,6 +180,7 @@ func _start_game() -> void:
 	state = GameState.PLAYING
 	obstacles.clear()
 	coins.clear()
+	player_sparks.clear()
 	elapsed = 0.0
 	score = 0
 	coin_count = 0
@@ -182,20 +192,18 @@ func _start_game() -> void:
 	is_sliding = false
 	jumps_remaining = 2
 	anim_frame = 0.0
-	_play_tone(540.0, 0.15)
+	_trigger_sound(500.0, 0.15)
 
 
 func _update_game(delta: float) -> void:
 	elapsed += delta
 	score = int(elapsed * 12.0) + coin_count * 30
 	
-	# Balanced, smooth speed scaling with comfortable plateaus
-	var target_speed = 380.0 + (elapsed * 4.5)
-	world_speed = minf(target_speed, 620.0)
+	var target_speed = 380.0 + (elapsed * 4.0)
+	world_speed = minf(target_speed, 600.0)
 
-	# Responsive jump physics
 	if player_bottom < FLOOR_Y:
-		vertical_speed += 1750.0 * delta
+		vertical_speed += 1850.0 * delta
 		player_bottom += vertical_speed * delta
 		if player_bottom >= FLOOR_Y:
 			player_bottom = FLOOR_Y
@@ -206,11 +214,10 @@ func _update_game(delta: float) -> void:
 		slide_timer = maxf(0.0, slide_timer - delta)
 		is_sliding = slide_timer > 0.0
 
-	# Progressive spawner timing with safe spacing gaps
 	spawn_timer -= delta
 	if spawn_timer <= 0.0:
 		_spawn_items()
-		spawn_timer = maxf(0.95, 1.7 - elapsed * 0.004) + rng.randf_range(0.0, 0.4)
+		spawn_timer = maxf(1.0, 1.75 - elapsed * 0.003) + rng.randf_range(0.0, 0.4)
 
 	for i in range(obstacles.size() - 1, -1, -1):
 		var obs: Dictionary = obstacles[i]
@@ -230,14 +237,14 @@ func _update_game(delta: float) -> void:
 
 
 func _spawn_items() -> void:
-	var spawn_x: float = get_viewport_rect().size.x + 110.0
-	var obs_type: int = rng.randi() % 3  # 0: Fire Pit, 1: Overhead Laser Drone, 2: Cyber-Citrus Vine Plant
+	var spawn_x: float = get_viewport_rect().size.x + 120.0
+	var obs_type: int = rng.randi() % 3
 	obstacles.append({"x": spawn_x, "type": obs_type})
 
 	if rng.randf() < 0.75:
 		coins.append({
 			"x": spawn_x + rng.randf_range(130.0, 270.0),
-			"y": rng.randf_range(270.0, 350.0)
+			"y": rng.randf_range(260.0, 340.0)
 		})
 
 
@@ -245,13 +252,13 @@ func _jump() -> void:
 	if is_sliding:
 		return
 	if player_bottom >= FLOOR_Y:
-		vertical_speed = -860.0
+		vertical_speed = -950.0
 		jumps_remaining = 1
-		_play_tone(600.0, 0.1)
+		_trigger_sound(650.0, 0.1)
 	elif jumps_remaining > 0:
-		vertical_speed = -760.0
+		vertical_speed = -820.0
 		jumps_remaining -= 1
-		_play_tone(800.0, 0.1)
+		_trigger_sound(850.0, 0.1)
 
 
 func _begin_slide() -> void:
@@ -259,17 +266,17 @@ func _begin_slide() -> void:
 		is_sliding = true
 		slide_timer = 0.55
 		vertical_speed = 0.0
-		_play_tone(300.0, 0.1)
+		_trigger_sound(300.0, 0.1)
 
 
 func _check_collisions() -> void:
 	var player_height: float = 26.0 if is_sliding else PLAYER_HEIGHT
 	var player_top: float = player_bottom - player_height
 	var player_rect := Rect2(
-		PLAYER_X - PLAYER_WIDTH / 2.0 + 5.0,
-		player_top + 5.0,
-		PLAYER_WIDTH - 10.0,
-		player_height - 10.0
+		PLAYER_X - PLAYER_WIDTH / 2.0 + 4.0,
+		player_top + 4.0,
+		PLAYER_WIDTH - 8.0,
+		player_height - 8.0
 	)
 
 	for obs in obstacles:
@@ -278,12 +285,12 @@ func _check_collisions() -> void:
 		var hitbox: Rect2
 
 		match type:
-			0: # Fire Pit (Jump over)
-				hitbox = Rect2(obs_x - 20.0, FLOOR_Y - 36.0, 40.0, 36.0)
-			1: # Overhead Laser Drone (Slide under)
-				hitbox = Rect2(obs_x - 28.0, FLOOR_Y - 76.0, 56.0, 26.0)
-			2: # Cyber-Citrus Plant / Vine (Precise jump)
-				hitbox = Rect2(obs_x - 18.0, FLOOR_Y - 50.0, 36.0, 50.0)
+			0: # Fire Pit
+				hitbox = Rect2(obs_x - 18.0, FLOOR_Y - 34.0, 36.0, 34.0)
+			1: # Drone
+				hitbox = Rect2(obs_x - 26.0, FLOOR_Y - 76.0, 52.0, 24.0)
+			2: # Desert Cactus
+				hitbox = Rect2(obs_x - 20.0, FLOOR_Y - 52.0, 40.0, 52.0)
 
 		if player_rect.intersects(hitbox):
 			_end_game()
@@ -300,7 +307,7 @@ func _check_collisions() -> void:
 		if player_rect.intersects(coin_rect):
 			coin_count += 1
 			coins.remove_at(i)
-			_play_tone(920.0, 0.08)
+			_trigger_sound(950.0, 0.08)
 
 
 func _end_game() -> void:
@@ -309,7 +316,7 @@ func _end_game() -> void:
 
 	state = GameState.GAME_OVER
 	score = int(elapsed * 12.0) + coin_count * 30
-	_play_tone(150.0, 0.3, "square")
+	_trigger_sound(180.0, 0.3)
 
 	if score > best_score:
 		best_score = score
@@ -331,7 +338,7 @@ func _save_best_score() -> void:
 func _draw() -> void:
 	var screen_size: Vector2 = get_viewport_rect().size
 
-	# Dynamic background shifting theme
+	# Dynamic Atmosphere Background
 	var bg_color = Color(0.015, 0.01, 0.05)
 	if score > 350:
 		bg_color = Color(0.025, 0.008, 0.04)
@@ -340,11 +347,11 @@ func _draw() -> void:
 
 	draw_rect(Rect2(Vector2.ZERO, screen_size), bg_color)
 
-	# Atmospheric particles
+	# Atmospheric Background Dust
 	for p in particles:
 		draw_circle(Vector2(p["x"], p["y"]), p["radius"], Color(0.6, 0.85, 1.0, p["alpha"]))
 
-	# Skyline Background Towers
+	# City Skyline
 	for i in range(16):
 		var building_x: float = float(i) * 78.0
 		var b_height: float = 95.0 + float((i * 43) % 135)
@@ -353,100 +360,140 @@ func _draw() -> void:
 			Color(0.04, 0.025, 0.11)
 		)
 
-		# Building windows glow
-		if i % 2 == 0:
-			draw_rect(Rect2(building_x + 12.0, FLOOR_Y - b_height + 20.0, 10.0, b_height - 40.0), Color(0.06, 0.04, 0.16))
-
-	# Floor road base
+	# Floor Road Base
 	draw_line(Vector2(0.0, FLOOR_Y), Vector2(screen_size.x, FLOOR_Y), Color(0.0, 0.95, 1.0), 4.0)
 	draw_line(Vector2(0.0, FLOOR_Y + 2.0), Vector2(screen_size.x, FLOOR_Y + 2.0), Color(0.0, 0.45, 0.85, 0.4), 12.0)
 
-	# Draw Professional Obstacles
+	# Thruster Trail Particles
+	for spark in player_sparks:
+		draw_circle(Vector2(spark["x"], spark["y"]), spark["life"] * 12.0, Color(0.0, 0.9, 1.0, spark["life"] * 3.0))
+
+	# -------------------------------------------------------------
+	# HIGH-DETAIL PROFESSIONAL OBSTACLES
+	# -------------------------------------------------------------
 	for obs in obstacles:
 		var x: float = float(obs["x"])
 		var type: int = int(obs["type"])
 
 		match type:
-			0: # 🔥 Fire Pit Hazard
-				draw_rect(Rect2(x - 22.0, FLOOR_Y - 10.0, 44.0, 10.0), Color(0.2, 0.1, 0.1))
+			0: # 🔥 Animated Fire Pit Hazard
+				# Steel Pit Base & Grate
+				draw_rect(Rect2(x - 24.0, FLOOR_Y - 6.0, 48.0, 6.0), Color(0.2, 0.22, 0.26))
+				draw_rect(Rect2(x - 20.0, FLOOR_Y - 10.0, 40.0, 4.0), Color(0.35, 0.38, 0.42))
+				
+				# Outer Flame Layer
+				var f_anim = sin(anim_frame * 15.0) * 4.0
 				draw_colored_polygon(
 					PackedVector2Array([
-						Vector2(x - 20.0, FLOOR_Y),
-						Vector2(x - 10.0, FLOOR_Y - 32.0),
-						Vector2(x, FLOOR_Y - 15.0),
-						Vector2(x + 10.0, FLOOR_Y - 38.0),
-						Vector2(x + 20.0, FLOOR_Y)
+						Vector2(x - 20.0, FLOOR_Y - 6.0),
+						Vector2(x - 10.0, FLOOR_Y - 34.0 + f_anim),
+						Vector2(x, FLOOR_Y - 18.0),
+						Vector2(x + 10.0, FLOOR_Y - 38.0 - f_anim),
+						Vector2(x + 20.0, FLOOR_Y - 6.0)
 					]),
-					Color(1.0, 0.35, 0.05)
+					Color(1.0, 0.25, 0.05)
 				)
+				# Inner Core Flame Layer
 				draw_colored_polygon(
 					PackedVector2Array([
-						Vector2(x - 10.0, FLOOR_Y),
-						Vector2(x, FLOOR_Y - 24.0),
-						Vector2(x + 10.0, FLOOR_Y)
+						Vector2(x - 12.0, FLOOR_Y - 6.0),
+						Vector2(x - 4.0, FLOOR_Y - 24.0 - f_anim),
+						Vector2(x + 4.0, FLOOR_Y - 26.0 + f_anim),
+						Vector2(x + 12.0, FLOOR_Y - 6.0)
 					]),
 					Color(1.0, 0.85, 0.1)
 				)
 
-			1: # 🛸 Overhead Laser Drone
-				draw_rect(Rect2(x - 28.0, FLOOR_Y - 76.0, 56.0, 16.0), Color(0.15, 0.15, 0.22))
-				draw_rect(Rect2(x - 12.0, FLOOR_Y - 82.0, 24.0, 6.0), Color(0.9, 0.1, 0.2)) # Core lens
-				# Glowing laser beam downwards
-				draw_line(Vector2(x, FLOOR_Y - 60.0), Vector2(x, FLOOR_Y), Color(1.0, 0.0, 0.3, 0.6), 3.0)
+			1: # 🛸 High-Tech Cyber Drone
+				# Anti-gravity rotors
+				draw_rect(Rect2(x - 30.0, FLOOR_Y - 80.0, 10.0, 4.0), Color(0.5, 0.55, 0.6))
+				draw_rect(Rect2(x + 20.0, FLOOR_Y - 80.0, 10.0, 4.0), Color(0.5, 0.55, 0.6))
+				# Drone Body Frame
+				draw_rect(Rect2(x - 24.0, FLOOR_Y - 76.0, 48.0, 16.0), Color(0.12, 0.15, 0.22))
+				draw_rect(Rect2(x - 18.0, FLOOR_Y - 72.0, 36.0, 8.0), Color(0.25, 0.3, 0.4))
+				# Red Lens & Warning Beacons
+				draw_circle(Vector2(x, FLOOR_Y - 68.0), 4.0, Color(1.0, 0.1, 0.2))
+				draw_circle(Vector2(x - 20.0, FLOOR_Y - 74.0), 2.0, Color(1.0, 0.8, 0.0))
+				draw_circle(Vector2(x + 20.0, FLOOR_Y - 74.0), 2.0, Color(1.0, 0.8, 0.0))
+				# Vertical Shimmering Laser
+				draw_line(Vector2(x, FLOOR_Y - 60.0), Vector2(x, FLOOR_Y), Color(1.0, 0.0, 0.35, 0.7), 4.0)
+				draw_line(Vector2(x, FLOOR_Y - 60.0), Vector2(x, FLOOR_Y), Color(1.0, 0.8, 0.9, 0.9), 1.5)
 
-			2: # 🍋 Cyber-Citrus Vine Plant
-				# Plant stem & bulbous glowing citrus fruit pods
-				draw_line(Vector2(x, FLOOR_Y), Vector2(x, FLOOR_Y - 44.0), Color(0.1, 0.7, 0.3), 5.0)
-				draw_circle(Vector2(x, FLOOR_Y - 36.0), 16.0, Color(0.95, 0.85, 0.1))
-				draw_circle(Vector2(x - 12.0, FLOOR_Y - 22.0), 11.0, Color(0.1, 0.8, 0.4))
-				draw_circle(Vector2(x + 12.0, FLOOR_Y - 26.0), 11.0, Color(0.1, 0.8, 0.4))
+			2: # 🌵 Realistic Shaded Desert Cactus
+				# Main Center Stem
+				draw_rect(Rect2(x - 10.0, FLOOR_Y - 54.0, 20.0, 54.0), Color(0.1, 0.55, 0.25))
+				draw_rect(Rect2(x - 6.0, FLOOR_Y - 52.0, 4.0, 50.0), Color(0.2, 0.7, 0.35)) # Highlight ridge
+				# Left Arm
+				draw_rect(Rect2(x - 22.0, FLOOR_Y - 36.0, 14.0, 8.0), Color(0.1, 0.55, 0.25))
+				draw_rect(Rect2(x - 22.0, FLOOR_Y - 48.0, 8.0, 16.0), Color(0.1, 0.55, 0.25))
+				# Right Arm
+				draw_rect(Rect2(x + 8.0, FLOOR_Y - 28.0, 14.0, 8.0), Color(0.1, 0.55, 0.25))
+				draw_rect(Rect2(x + 14.0, FLOOR_Y - 42.0, 8.0, 18.0), Color(0.1, 0.55, 0.25))
+				# Hazard Spikes
+				draw_line(Vector2(x - 10.0, FLOOR_Y - 40.0), Vector2(x - 14.0, FLOOR_Y - 42.0), Color(1.0, 0.9, 0.4), 1.5)
+				draw_line(Vector2(x + 10.0, FLOOR_Y - 20.0), Vector2(x + 14.0, FLOOR_Y - 22.0), Color(1.0, 0.9, 0.4), 1.5)
 
-	# Draw Gold Coins
+	# Gold Coins
 	for coin in coins:
 		var center := Vector2(float(coin["x"]), float(coin["y"]))
 		draw_circle(center, 14.0, Color(1.0, 0.85, 0.15))
 		draw_circle(center, 7.0, Color(0.08, 0.04, 0.12))
 
-	# 🤖 Professional Robot Character Rendering (Real Head, Torso, Arms, Legs)
+	# -------------------------------------------------------------
+	# 🤖 HIGHLY DETAILED ARTICULATED ROBOT PLAYER
+	# -------------------------------------------------------------
 	var player_height: float = 26.0 if is_sliding else PLAYER_HEIGHT
 	var player_top: float = player_bottom - player_height
 
 	if not is_sliding:
-		# Running Leg Animation Cycle using sine waves
-		var leg_offset = sin(anim_frame * 12.0) * 8.0
+		# Kinematic Sine Limb Motion
+		var leg_phase = sin(anim_frame * 14.0)
+		var arm_phase = cos(anim_frame * 14.0)
 
-		# Back Leg
-		draw_line(Vector2(PLAYER_X - 4.0, player_top + 36.0), Vector2(PLAYER_X - 10.0 - leg_offset, FLOOR_Y), Color(0.65, 0.75, 0.85), 4.0)
-		# Back Arm
-		draw_line(Vector2(PLAYER_X, player_top + 20.0), Vector2(PLAYER_X + 10.0 + leg_offset, player_top + 34.0), Color(0.65, 0.75, 0.85), 3.0)
+		# Back Leg (Knee Joint)
+		var b_knee = Vector2(PLAYER_X - 6.0 - leg_phase * 6.0, player_top + 44.0)
+		var b_foot = Vector2(PLAYER_X - 10.0 - leg_phase * 10.0, FLOOR_Y)
+		draw_line(Vector2(PLAYER_X - 2.0, player_top + 32.0), b_knee, Color(0.5, 0.6, 0.7), 4.0)
+		draw_line(b_knee, b_foot, Color(0.4, 0.5, 0.6), 3.5)
 
-		# Torso / Chassis Armor
-		draw_rect(Rect2(PLAYER_X - 12.0, player_top + 16.0, 24.0, 22.0), Color(0.15, 0.22, 0.35))
-		# Glowing Arc Reactor Core
-		draw_circle(Vector2(PLAYER_X, player_top + 27.0), 5.0, Color(0.0, 0.9, 1.0))
+		# Back Arm (Elbow Joint)
+		var b_elbow = Vector2(PLAYER_X + 6.0 + arm_phase * 6.0, player_top + 26.0)
+		draw_line(Vector2(PLAYER_X, player_top + 18.0), b_elbow, Color(0.5, 0.6, 0.7), 3.0)
 
-		# Head & Helmet
-		draw_rect(Rect2(PLAYER_X - 11.0, player_top + 2.0, 22.0, 15.0), Color(0.8, 0.88, 0.95))
-		# LED Visor Eye (Cyan Glow)
-		draw_rect(Rect2(PLAYER_X - 7.0, player_top + 6.0, 15.0, 4.0), Color(0.0, 1.0, 0.95))
-		# Head Antenna
+		# Main Torso & Armor Plates
+		draw_rect(Rect2(PLAYER_X - 12.0, player_top + 14.0, 24.0, 22.0), Color(0.12, 0.18, 0.3))
+		draw_rect(Rect2(PLAYER_X - 9.0, player_top + 16.0, 18.0, 18.0), Color(0.2, 0.28, 0.42))
+		# Arc Reactor Chest Core
+		draw_circle(Vector2(PLAYER_X, player_top + 25.0), 6.0, Color(0.0, 0.9, 1.0))
+		draw_circle(Vector2(PLAYER_X, player_top + 25.0), 3.0, Color(1.0, 1.0, 1.0))
+
+		# Head, Helmet & Visor
+		draw_rect(Rect2(PLAYER_X - 10.0, player_top + 2.0, 20.0, 13.0), Color(0.8, 0.88, 0.95))
+		# Visor Eye & Glint
+		draw_rect(Rect2(PLAYER_X - 6.0, player_top + 5.0, 14.0, 4.0), Color(0.0, 1.0, 0.95))
+		draw_rect(Rect2(PLAYER_X + 2.0, player_top + 5.0, 3.0, 4.0), Color(1.0, 1.0, 1.0))
+		# Antenna
 		draw_line(Vector2(PLAYER_X, player_top + 2.0), Vector2(PLAYER_X, player_top - 6.0), Color(0.8, 0.88, 0.95), 2.0)
 		draw_circle(Vector2(PLAYER_X, player_top - 7.0), 3.0, Color(1.0, 0.1, 0.4))
 
 		# Front Arm
-		draw_line(Vector2(PLAYER_X, player_top + 20.0), Vector2(PLAYER_X - 10.0 + leg_offset, player_top + 34.0), Color(0.8, 0.88, 0.95), 3.0)
+		var f_elbow = Vector2(PLAYER_X - 8.0 - arm_phase * 6.0, player_top + 26.0)
+		draw_line(Vector2(PLAYER_X, player_top + 18.0), f_elbow, Color(0.8, 0.88, 0.95), 3.0)
+
 		# Front Leg
-		draw_line(Vector2(PLAYER_X + 4.0, player_top + 36.0), Vector2(PLAYER_X + 10.0 + leg_offset, FLOOR_Y), Color(0.8, 0.88, 0.95), 4.0)
+		var f_knee = Vector2(PLAYER_X + 6.0 + leg_phase * 6.0, player_top + 44.0)
+		var f_foot = Vector2(PLAYER_X + 10.0 + leg_phase * 10.0, FLOOR_Y)
+		draw_line(Vector2(PLAYER_X + 2.0, player_top + 32.0), f_knee, Color(0.8, 0.88, 0.95), 4.0)
+		draw_line(f_knee, f_foot, Color(0.7, 0.8, 0.9), 3.5)
 
 	else:
-		# Sliding Robot Pose (Aerodynamic tuck)
-		draw_rect(Rect2(PLAYER_X - 18.0, player_top + 10.0, 32.0, 16.0), Color(0.15, 0.22, 0.35))
+		# Aerodynamic Sliding Pose
+		draw_rect(Rect2(PLAYER_X - 20.0, player_top + 8.0, 34.0, 16.0), Color(0.12, 0.18, 0.3))
 		draw_rect(Rect2(PLAYER_X + 2.0, player_top + 2.0, 16.0, 12.0), Color(0.8, 0.88, 0.95))
 		draw_rect(Rect2(PLAYER_X + 6.0, player_top + 5.0, 10.0, 3.0), Color(0.0, 1.0, 0.95))
-		# Trailing slide legs
-		draw_rect(Rect2(PLAYER_X - 24.0, player_top + 18.0, 12.0, 6.0), Color(0.65, 0.75, 0.85))
+		draw_rect(Rect2(PLAYER_X - 26.0, player_top + 16.0, 14.0, 6.0), Color(0.5, 0.6, 0.7))
 
-	# HUD Header Score Display
+	# HUD
 	draw_string(
 		ThemeDB.fallback_font,
 		Vector2(24.0, 36.0),
@@ -457,7 +504,7 @@ func _draw() -> void:
 		Color(0.9, 0.95, 1.0)
 	)
 
-	# Sound Toggle Button UI
+	# Sound Button UI
 	var sound_btn_rect = Rect2(screen_size.x - 170.0, 12.0, 150.0, 34.0)
 	draw_rect(sound_btn_rect, Color(0.08, 0.12, 0.25, 0.85))
 	draw_rect(sound_btn_rect, Color(0.0, 0.9, 1.0), false, 2.0)
@@ -472,7 +519,7 @@ func _draw() -> void:
 		Color(1.0, 1.0, 1.0)
 	)
 
-	# State Overlays
+	# Overlays
 	match state:
 		GameState.MENU:
 			_draw_overlay(screen_size, "NEON DASH RUNNER", "START GAME")
@@ -508,7 +555,6 @@ func _draw_overlay(screen_size: Vector2, title: String, btn_label: String, subte
 			Color(0.9, 0.9, 1.0)
 		)
 
-	# Interactive Button
 	var btn_rect = Rect2(center_x - 110.0, 300.0, 220.0, 52.0)
 	draw_rect(btn_rect, Color(0.0, 0.8, 0.9, 0.9))
 	draw_rect(btn_rect, Color(1.0, 1.0, 1.0), false, 2.0)
