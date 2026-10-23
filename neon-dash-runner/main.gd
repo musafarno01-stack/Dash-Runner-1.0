@@ -23,8 +23,8 @@ var elapsed: float = 0.0
 var score: int = 0
 var coin_count: int = 0
 var best_score: int = 0
-var world_speed: float = 400.0
-var spawn_timer: float = 1.0
+var world_speed: float = 380.0
+var spawn_timer: float = 1.2
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 # Audio variables
@@ -55,7 +55,6 @@ func _setup_audio() -> void:
 func _play_tone(freq: float, duration: float, type: String = "sine") -> void:
 	if not sound_enabled or not playback:
 		return
-	# Simple procedural sound synthesizer to avoid missing audio files
 	var frames_to_generate = int(22050 * duration)
 	for i in range(frames_to_generate):
 		if playback.get_frames_available() < 1:
@@ -66,7 +65,6 @@ func _play_tone(freq: float, duration: float, type: String = "sine") -> void:
 			sample = 1.0 if sample > 0 else -1.0
 		elif type == "noise":
 			sample = randf_range(-1.0, 1.0)
-		# Apply quick fade out envelope
 		sample *= max(0.0, 1.0 - (float(i) / frames_to_generate))
 		playback.push_frame(Vector2(sample * 0.15, sample * 0.15))
 
@@ -78,17 +76,17 @@ func _process(delta: float) -> void:
 	# Background glowing particle drift
 	for i in range(particles.size() - 1, -1, -1):
 		var p = particles[i]
-		p["x"] -= (world_speed * 0.45 + p["speed_offset"]) * delta
+		p["x"] -= (world_speed * 0.4 + p["speed_offset"]) * delta
 		if p["x"] < -20.0:
 			particles.remove_at(i)
 			
-	if state == GameState.PLAYING and randf() < 0.35:
+	if state == GameState.PLAYING and randf() < 0.3:
 		particles.append({
 			"x": 980.0,
 			"y": randf_range(40.0, FLOOR_Y - 20.0),
 			"radius": randf_range(1.5, 3.5),
-			"speed_offset": randf_range(15.0, 60.0),
-			"alpha": randf_range(0.2, 0.7)
+			"speed_offset": randf_range(15.0, 50.0),
+			"alpha": randf_range(0.2, 0.6)
 		})
 
 	queue_redraw()
@@ -139,7 +137,6 @@ func _toggle_sound() -> void:
 
 
 func _handle_tap(pos: Vector2) -> void:
-	# Check if tap was near top-right corner (Mute button toggle zone)
 	if pos.x > 840.0 and pos.y < 60.0:
 		_toggle_sound()
 		return
@@ -163,8 +160,8 @@ func _start_game() -> void:
 	elapsed = 0.0
 	score = 0
 	coin_count = 0
-	world_speed = 400.0
-	spawn_timer = 0.8
+	world_speed = 380.0
+	spawn_timer = 1.2
 	player_bottom = FLOOR_Y
 	vertical_speed = 0.0
 	slide_timer = 0.0
@@ -175,12 +172,12 @@ func _start_game() -> void:
 
 func _update_game(delta: float) -> void:
 	elapsed += delta
-	score = int(elapsed * 15.0) + coin_count * 35
-	world_speed = minf(400.0 + elapsed * 7.0, 720.0)
+	score = int(elapsed * 12.0) + coin_count * 30
+	world_speed = minf(380.0 + elapsed * 5.5, 660.0)
 
-	# Physics & Gravity with responsive jump arc
+	# Responsive gravity & jump arc
 	if player_bottom < FLOOR_Y:
-		vertical_speed += 1850.0 * delta
+		vertical_speed += 1750.0 * delta
 		player_bottom += vertical_speed * delta
 		if player_bottom >= FLOOR_Y:
 			player_bottom = FLOOR_Y
@@ -191,13 +188,12 @@ func _update_game(delta: float) -> void:
 		slide_timer = maxf(0.0, slide_timer - delta)
 		is_sliding = slide_timer > 0.0
 
-	# Progressive Spawner
+	# Spawner timer with safe spacing
 	spawn_timer -= delta
 	if spawn_timer <= 0.0:
 		_spawn_items()
-		spawn_timer = maxf(0.6, 1.25 - elapsed * 0.008) + rng.randf_range(0.0, 0.3)
+		spawn_timer = maxf(0.85, 1.6 - elapsed * 0.005) + rng.randf_range(0.0, 0.4)
 
-	# Obstacles update
 	for i in range(obstacles.size() - 1, -1, -1):
 		var obs: Dictionary = obstacles[i]
 		obs["x"] = float(obs["x"]) - world_speed * delta
@@ -205,7 +201,6 @@ func _update_game(delta: float) -> void:
 		if float(obs["x"]) < -120.0:
 			obstacles.remove_at(i)
 
-	# Coins update
 	for i in range(coins.size() - 1, -1, -1):
 		var coin: Dictionary = coins[i]
 		coin["x"] = float(coin["x"]) - world_speed * delta
@@ -217,14 +212,14 @@ func _update_game(delta: float) -> void:
 
 
 func _spawn_items() -> void:
-	var spawn_x: float = get_viewport_rect().size.x + 90.0
-	var overhead: bool = rng.randf() < 0.42
-	obstacles.append({"x": spawn_x, "overhead": overhead})
+	var spawn_x: float = get_viewport_rect().size.x + 100.0
+	var obs_type: int = rng.randi() % 3  # 0: Ground Spike, 1: Overhead Bar, 2: Tall Block
+	obstacles.append({"x": spawn_x, "type": obs_type})
 
-	if rng.randf() < 0.78:
+	if rng.randf() < 0.7:
 		coins.append({
-			"x": spawn_x + rng.randf_range(110.0, 250.0),
-			"y": rng.randf_range(260.0, 360.0)
+			"x": spawn_x + rng.randf_range(120.0, 260.0),
+			"y": rng.randf_range(250.0, 350.0)
 		})
 
 
@@ -232,21 +227,21 @@ func _jump() -> void:
 	if is_sliding:
 		return
 	if player_bottom >= FLOOR_Y:
-		vertical_speed = -720.0
+		vertical_speed = -750.0  # Generous jump height
 		jumps_remaining = 1
-		_play_tone(520.0, 0.1)
+		_play_tone(540.0, 0.1)
 	elif jumps_remaining > 0:
-		vertical_speed = -640.0
+		vertical_speed = -680.0  # Crisp double jump
 		jumps_remaining -= 1
-		_play_tone(680.0, 0.1)
+		_play_tone(720.0, 0.1)
 
 
 func _begin_slide() -> void:
 	if player_bottom >= FLOOR_Y:
 		is_sliding = true
-		slide_timer = 0.52
+		slide_timer = 0.55
 		vertical_speed = 0.0
-		_play_tone(300.0, 0.1)
+		_play_tone(320.0, 0.1)
 
 
 func _check_collisions() -> void:
@@ -261,14 +256,16 @@ func _check_collisions() -> void:
 
 	for obs in obstacles:
 		var obs_x: float = float(obs["x"])
+		var type: int = int(obs["type"])
 		var hitbox: Rect2
 
-		if bool(obs["overhead"]):
-			# High barrier: requires sliding underneath
-			hitbox = Rect2(obs_x - 26.0, FLOOR_Y - 70.0, 52.0, 28.0)
-		else:
-			# Low obstacle: requires jumping over
-			hitbox = Rect2(obs_x - 22.0, FLOOR_Y - 48.0, 44.0, 48.0)
+		match type:
+			0: # Ground Spike (Jump over)
+				hitbox = Rect2(obs_x - 22.0, FLOOR_Y - 45.0, 44.0, 45.0)
+			1: # Overhead Laser Bar (Slide under)
+				hitbox = Rect2(obs_x - 28.0, FLOOR_Y - 72.0, 56.0, 26.0)
+			2: # Tall Cyber Block (Precise jump)
+				hitbox = Rect2(obs_x - 24.0, FLOOR_Y - 60.0, 48.0, 60.0)
 
 		if player_rect.intersects(hitbox):
 			_end_game()
@@ -293,7 +290,7 @@ func _end_game() -> void:
 		return
 
 	state = GameState.GAME_OVER
-	score = int(elapsed * 15.0) + coin_count * 35
+	score = int(elapsed * 12.0) + coin_count * 30
 	_play_tone(150.0, 0.3, "square")
 
 	if score > best_score:
@@ -316,14 +313,20 @@ func _save_best_score() -> void:
 func _draw() -> void:
 	var screen_size: Vector2 = get_viewport_rect().size
 
-	# 1. Cyberpunk Dark Background
-	draw_rect(Rect2(Vector2.ZERO, screen_size), Color(0.018, 0.012, 0.06))
+	# Dynamic Background Theme based on Score
+	var bg_color = Color(0.018, 0.012, 0.06) # Cyber Blue
+	if score > 300:
+		bg_color = Color(0.03, 0.01, 0.05)   # Neon Purple
+	if score > 700:
+		bg_color = Color(0.05, 0.01, 0.02)   # Crimson Danger
 
-	# 2. Glowing background dust particles
+	draw_rect(Rect2(Vector2.ZERO, screen_size), bg_color)
+
+	# Glowing background dust particles
 	for p in particles:
 		draw_circle(Vector2(p["x"], p["y"]), p["radius"], Color(0.5, 0.85, 1.0, p["alpha"]))
 
-	# 3. Layered Skyline Buildings
+	# Skyline Buildings
 	for i in range(15):
 		var building_x: float = float(i) * 80.0
 		var b_height: float = 90.0 + float((i * 47) % 130)
@@ -332,7 +335,7 @@ func _draw() -> void:
 			Color(0.045, 0.03, 0.12)
 		)
 
-	# 4. Neon Floor Grid & Glow Line
+	# Neon Floor Grid
 	draw_line(
 		Vector2(0.0, FLOOR_Y),
 		Vector2(screen_size.x, FLOOR_Y),
@@ -346,63 +349,57 @@ func _draw() -> void:
 		10.0
 	)
 
-	# 5. Draw Obstacles (Neon Magenta with warning stripes)
+	# Draw Diverse Obstacles
 	for obs in obstacles:
 		var x: float = float(obs["x"])
+		var type: int = int(obs["type"])
 
-		if bool(obs["overhead"]):
-			draw_rect(
-				Rect2(x - 26.0, FLOOR_Y - 70.0, 52.0, 28.0),
-				Color(1.0, 0.08, 0.48)
-			)
-			draw_line(
-				Vector2(x - 26.0, FLOOR_Y - 42.0),
-				Vector2(x - 26.0, FLOOR_Y - 14.0),
-				Color(1.0, 0.08, 0.48),
-				4.0
-			)
-			draw_line(
-				Vector2(x + 26.0, FLOOR_Y - 42.0),
-				Vector2(x + 26.0, FLOOR_Y - 14.0),
-				Color(1.0, 0.08, 0.48),
-				4.0
-			)
-		else:
-			draw_colored_polygon(
-				PackedVector2Array([
-					Vector2(x - 24.0, FLOOR_Y),
-					Vector2(x, FLOOR_Y - 48.0),
-					Vector2(x + 24.0, FLOOR_Y)
-				]),
-				Color(1.0, 0.08, 0.48)
-			)
+		match type:
+			0: # Ground Spike
+				draw_colored_polygon(
+					PackedVector2Array([
+						Vector2(x - 22.0, FLOOR_Y),
+						Vector2(x, FLOOR_Y - 45.0),
+						Vector2(x + 22.0, FLOOR_Y)
+					]),
+					Color(1.0, 0.08, 0.48)
+				)
+			1: # Overhead Laser Bar
+				draw_rect(Rect2(x - 28.0, FLOOR_Y - 72.0, 56.0, 26.0), Color(1.0, 0.15, 0.6))
+				draw_line(Vector2(x - 28.0, FLOOR_Y - 46.0), Vector2(x - 28.0, FLOOR_Y - 15.0), Color(1.0, 0.15, 0.6), 4.0)
+				draw_line(Vector2(x + 28.0, FLOOR_Y - 46.0), Vector2(x + 28.0, FLOOR_Y - 15.0), Color(1.0, 0.15, 0.6), 4.0)
+			2: # Tall Cyber Block
+				draw_rect(Rect2(x - 24.0, FLOOR_Y - 60.0, 48.0, 60.0), Color(0.9, 0.2, 1.0))
+				draw_rect(Rect2(x - 16.0, FLOOR_Y - 48.0, 32.0, 36.0), Color(0.1, 0.05, 0.15))
 
-	# 6. Draw Collectible Coins (Golden Rings)
+	# Draw Coins
 	for coin in coins:
 		var center := Vector2(float(coin["x"]), float(coin["y"]))
 		draw_circle(center, 14.0, Color(1.0, 0.85, 0.15))
 		draw_circle(center, 7.0, Color(0.08, 0.04, 0.12))
 
-	# 7. Draw Upgraded Visual Player Character
+	# Draw Detailed Robot Player Sprite
 	var player_height: float = 28.0 if is_sliding else PLAYER_HEIGHT
 	var player_top: float = player_bottom - player_height
-	var player_rect = Rect2(PLAYER_X - PLAYER_WIDTH / 2.0, player_top, PLAYER_WIDTH, player_height)
-	
-	# Outer Neon Cyan Body Shell
-	draw_rect(player_rect, Color(0.0, 0.92, 1.0))
-	# Inner Dark Cyber Core Plate
-	draw_rect(
-		Rect2(PLAYER_X - PLAYER_WIDTH / 2.0 + 6.0, player_top + 8.0, PLAYER_WIDTH - 12.0, player_height - 16.0),
-		Color(0.02, 0.05, 0.12)
-	)
-	# Glowing Neon Visor / Eye Strip
-	if not is_sliding:
-		draw_rect(
-			Rect2(PLAYER_X - 6.0, player_top + 12.0, 18.0, 6.0),
-			Color(1.0, 0.9, 0.2)
-		)
 
-	# 8. HUD & Sound Button Indicator
+	if not is_sliding:
+		# Robot Head
+		draw_rect(Rect2(PLAYER_X - 12.0, player_top, 24.0, 18.0), Color(0.75, 0.88, 0.95))
+		# Glowing Visor
+		draw_rect(Rect2(PLAYER_X - 8.0, player_top + 4.0, 16.0, 5.0), Color(0.0, 1.0, 0.9))
+		# Antenna & LED
+		draw_line(Vector2(PLAYER_X, player_top), Vector2(PLAYER_X, player_top - 8.0), Color(0.75, 0.88, 0.95), 2.0)
+		draw_circle(Vector2(PLAYER_X, player_top - 9.0), 3.0, Color(1.0, 0.1, 0.4))
+		# Robot Body / Armor
+		draw_rect(Rect2(PLAYER_X - PLAYER_WIDTH / 2.0, player_top + 18.0, PLAYER_WIDTH, player_height - 18.0), Color(0.12, 0.18, 0.3))
+		# Arc Reactor Core
+		draw_circle(Vector2(PLAYER_X, player_top + 30.0), 6.0, Color(0.0, 0.9, 1.0))
+	else:
+		# Sliding Robot Pose
+		draw_rect(Rect2(PLAYER_X - PLAYER_WIDTH / 2.0, player_top, PLAYER_WIDTH, player_height), Color(0.75, 0.88, 0.95))
+		draw_rect(Rect2(PLAYER_X - 6.0, player_top + 4.0, 14.0, 4.0), Color(0.0, 1.0, 0.9))
+
+	# HUD
 	draw_string(
 		ThemeDB.fallback_font,
 		Vector2(24.0, 38.0),
@@ -424,13 +421,13 @@ func _draw() -> void:
 		Color(0.7, 0.8, 1.0)
 	)
 
-	# State Overlay Screens
+	# State Overlays
 	match state:
 		GameState.MENU:
 			_draw_message(
 				screen_size,
 				"NEON DASH RUNNER",
-				"TAP or ENTER to Play\nLeft Side: Jump (Double Jump)  |  Right Side: Slide\nPress M or Top-Right to Toggle Audio"
+				"TAP or ENTER to Play\nLeft Side: Jump (Double Jump)  |  Right Side: Slide\nPress M to Toggle Audio"
 			)
 		GameState.PAUSED:
 			_draw_message(
@@ -442,7 +439,7 @@ func _draw() -> void:
 			_draw_message(
 				screen_size,
 				"GAME OVER",
-				"Final Score: %d    Coins Collected: %d\nENTER / TAP to Play Again    |    M: Toggle Sound"
+				"Final Score: %d    Coins Collected: %d\nENTER / TAP to Play Again"
 				% [score, coin_count]
 			)
 
