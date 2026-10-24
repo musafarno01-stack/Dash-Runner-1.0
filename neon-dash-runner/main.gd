@@ -2,7 +2,7 @@ extends Node2D
 
 enum WeatherType { SUNNY, CLOUDY, RAINY, THUNDER, SNOW }
 
-# Current Selected City Weather Data
+# Live Selected City State
 var current_city: String = "Kohat"
 var current_temp: int = 32
 var weather_type: WeatherType = WeatherType.SUNNY
@@ -10,16 +10,16 @@ var weather_condition_text: String = "Mostly Sunny"
 var humidity: int = 42
 var wind_speed: float = 12.5
 var uv_index: int = 6
-var air_quality: String = "Good (45 µg/m³)"
-var visibility: float = 10.0
+var air_quality: String = "Good (42 AQI)"
 
-# Search & Interaction State
+# Search & State Handling
 var is_searching: bool = false
 var search_query: String = ""
-var scroll_offset: float = 0.0
-var max_scroll: float = 300.0
+var anim_timer: float = 0.0
 
-# Hourly Forecast Data
+var raindrops: Array[Dictionary] = []
+var clouds: Array[Dictionary] = []
+
 var hourly_forecast = [
 	{"time": "Now", "temp": 32, "icon": "☀️"},
 	{"time": "1 PM", "temp": 34, "icon": "☀️"},
@@ -27,25 +27,8 @@ var hourly_forecast = [
 	{"time": "3 PM", "temp": 34, "icon": "⛅"},
 	{"time": "4 PM", "temp": 32, "icon": "⛅"},
 	{"time": "5 PM", "temp": 30, "icon": "🌥️"},
-	{"time": "6 PM", "temp": 28, "icon": "🌙"},
-	{"time": "7 PM", "temp": 26, "icon": "🌙"}
+	{"time": "6 PM", "temp": 28, "icon": "🌙"}
 ]
-
-# 7-Day Forecast Data
-var weekly_forecast = [
-	{"day": "Today", "cond": "Sunny", "low": 24, "high": 35},
-	{"day": "Sun", "cond": "Partly Cloudy", "low": 22, "high": 33},
-	{"day": "Mon", "cond": "Scattered Showers", "low": 20, "high": 29},
-	{"day": "Tue", "cond": "Thunderstorm", "low": 19, "high": 27},
-	{"day": "Wed", "cond": "Sunny", "low": 21, "high": 32},
-	{"day": "Thu", "cond": "Clear", "low": 23, "high": 34},
-	{"day": "Fri", "cond": "Sunny", "low": 24, "high": 36}
-]
-
-# Visual animation timers
-var anim_timer: float = 0.0
-var raindrops: Array[Dictionary] = []
-var clouds: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -54,19 +37,21 @@ func _ready() -> void:
 
 
 func _init_particles() -> void:
-	for i in range(15):
+	clouds.clear()
+	raindrops.clear()
+	for i in range(12):
 		clouds.append({
-			"x": randf_range(-100.0, 900.0),
-			"y": randf_range(40.0, 220.0),
-			"speed": randf_range(8.0, 20.0),
-			"size": randf_range(40.0, 90.0)
+			"x": randf_range(-100.0, 500.0),
+			"y": randf_range(30.0, 200.0),
+			"speed": randf_range(6.0, 18.0),
+			"size": randf_range(32.0, 65.0)
 		})
-	for i in range(40):
+	for i in range(35):
 		raindrops.append({
-			"x": randf_range(0.0, 800.0),
-			"y": randf_range(0.0, 600.0),
-			"speed": randf_range(400.0, 700.0),
-			"length": randf_range(12.0, 25.0)
+			"x": randf_range(0.0, 500.0),
+			"y": randf_range(0.0, 950.0),
+			"speed": randf_range(450.0, 750.0),
+			"length": randf_range(12.0, 24.0)
 		})
 
 
@@ -76,16 +61,16 @@ func _process(delta: float) -> void:
 	# Move clouds
 	for c in clouds:
 		c["x"] += c["speed"] * delta
-		if c["x"] > 900.0:
-			c["x"] = -120.0
+		if c["x"] > 520.0:
+			c["x"] = -100.0
 
-	# Move rain if rainy
+	# Move rain if applicable
 	if weather_type == WeatherType.RAINY or weather_type == WeatherType.THUNDER:
 		for r in raindrops:
 			r["y"] += r["speed"] * delta
-			if r["y"] > 600.0:
+			if r["y"] > 950.0:
 				r["y"] = -30.0
-				r["x"] = randf_range(0.0, 800.0)
+				r["x"] = randf_range(0.0, 500.0)
 
 	queue_redraw()
 
@@ -99,12 +84,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_lookup_city(search_query)
 				is_searching = false
 				search_query = ""
-			elif event.alt_pressed == false and event.ctrl_pressed == false and event.unicode > 31:
+			elif event.unicode > 31:
 				search_query += char(event.unicode)
-		else:
-			if event.keycode == KEY_S:
-				is_location_enabled = not is_location_enabled
-				_trigger_notification("Location Services " + ("Enabled" if is_location_enabled else "Disabled"))
 
 	if event is InputEventScreenTouch and event.pressed:
 		_handle_click(event.position)
@@ -112,182 +93,147 @@ func _unhandled_input(event: InputEvent) -> void:
 		_handle_click(event.position)
 
 
-var is_location_enabled: bool = true
-var notification_text: String = ""
-var notification_timer: float = 0.0
-
-
-func _trigger_notification(msg: String) -> void:
-	notification_text = msg
-	notification_timer = 3.5
-
-
 func _lookup_city(city_name: String) -> void:
 	if city_name.strip_edges() == "":
 		return
 	current_city = city_name.capitalize()
 	
-	# Mock data randomization based on city name for realism
-	var hash_val = current_city.hash() % 5
+	var hash_val = abs(current_city.hash()) % 4
 	match hash_val:
 		0:
 			weather_type = WeatherType.SUNNY
 			weather_condition_text = "Sunny & Clear"
-			current_temp = randi_range(28, 38)
-			humidity = 35
+			current_temp = randi_range(30, 38)
+			humidity = 38
 		1:
 			weather_type = WeatherType.CLOUDY
 			weather_condition_text = "Partly Cloudy"
-			current_temp = randi_range(22, 29)
-			humidity = 60
+			current_temp = randi_range(24, 29)
+			humidity = 58
 		2:
 			weather_type = WeatherType.RAINY
 			weather_condition_text = "Light Showers"
-			current_temp = randi_range(17, 24)
-			humidity = 88
+			current_temp = randi_range(18, 23)
+			humidity = 84
 		3:
 			weather_type = WeatherType.THUNDER
 			weather_condition_text = "Thunderstorm"
-			current_temp = randi_range(16, 22)
-			humidity = 92
-		4:
-			weather_type = WeatherType.SNOW
-			weather_condition_text = "Light Snow"
-			current_temp = randi_range(-4, 3)
-			humidity = 75
-
-	_trigger_notification("Weather updated for " + current_city)
+			current_temp = randi_range(16, 21)
+			humidity = 91
 
 
 func _handle_click(pos: Vector2) -> void:
-	var screen_size = get_viewport_rect().size
+	var screen_w = get_viewport_rect().size.x
 
-	# Search Bar Click
-	var search_rect = Rect2(40.0, 20.0, screen_size.x - 80.0, 48.0)
-	if search_rect.has_point(pos):
+	# Search bar touch area
+	if Rect2(20.0, 20.0, screen_w - 40.0, 48.0).has_point(pos):
 		is_searching = true
 		return
 
 	# Quick City Pill Buttons
-	var cities = ["Kohat", "Islamabad", "Peshawar", "Manila", "London", "New York"]
-	var start_x = 40.0
+	var cities = ["Kohat", "Peshawar", "Islamabad", "Manila", "London"]
+	var start_x = 20.0
 	for c in cities:
-		var pill_rect = Rect2(start_x, 80.0, 95.0, 34.0)
+		var pill_rect = Rect2(start_x, 80.0, 88.0, 32.0)
 		if pill_rect.has_point(pos):
 			_lookup_city(c)
 			is_searching = false
 			return
-		start_x += 105.0
+		start_x += 94.0
 
 
 func _draw() -> void:
-	var screen_size = get_viewport_rect().size
+	var size = get_viewport_rect().size
+	if size.x <= 0 or size.y <= 0:
+		return
 
-	# 1. Dynamic Background Gradient based on Weather
-	var top_color = Color(0.12, 0.45, 0.85) # Sunny Blue
-	var bot_color = Color(0.25, 0.65, 0.95)
-	
-	match weather_type:
-		WeatherType.CLOUDY:
-			top_color = Color(0.28, 0.42, 0.58)
-			bot_color = Color(0.48, 0.62, 0.78)
-		WeatherType.RAINY:
-			top_color = Color(0.15, 0.25, 0.38)
-			bot_color = Color(0.28, 0.42, 0.55)
-		WeatherType.THUNDER:
-			top_color = Color(0.08, 0.10, 0.18)
-			bot_color = Color(0.18, 0.22, 0.32)
-		WeatherType.SNOW:
-			top_color = Color(0.32, 0.48, 0.65)
-			bot_color = Color(0.55, 0.72, 0.88)
+	# 1. Sky Color Gradient Based on Weather
+	var top_color = Color(0.12, 0.45, 0.85) # Sunny Sky
+	if weather_type == WeatherType.CLOUDY:
+		top_color = Color(0.28, 0.4, 0.55)
+	elif weather_type == WeatherType.RAINY:
+		top_color = Color(0.16, 0.25, 0.38)
+	elif weather_type == WeatherType.THUNDER:
+		top_color = Color(0.08, 0.12, 0.22)
 
-	draw_rect(Rect2(Vector2.ZERO, screen_size), top_color)
+	draw_rect(Rect2(Vector2.ZERO, size), top_color)
 
-	# 2. Render Animated Clouds for Cloudy/Rainy
+	# 2. Animated Sun Rays or Sun Glow
+	if weather_type == WeatherType.SUNNY:
+		var sun_center = Vector2(size.x - 80.0, 180.0)
+		var glow_pulse = sin(anim_timer * 2.0) * 8.0
+		draw_circle(sun_center, 65.0 + glow_pulse, Color(1.0, 0.85, 0.3, 0.22))
+		draw_circle(sun_center, 45.0, Color(1.0, 0.9, 0.4, 0.85))
+
+	# 3. Clouds
 	if weather_type != WeatherType.SUNNY:
 		for c in clouds:
-			draw_circle(Vector2(c["x"], c["y"]), c["size"], Color(1.0, 1.0, 1.0, 0.25))
-			draw_circle(Vector2(c["x"] + 30.0, c["y"] + 10.0), c["size"] * 0.8, Color(1.0, 1.0, 1.0, 0.2))
+			draw_circle(Vector2(c["x"], c["y"]), c["size"], Color(1.0, 1.0, 1.0, 0.22))
+			draw_circle(Vector2(c["x"] + 25.0, c["y"] + 8.0), c["size"] * 0.75, Color(1.0, 1.0, 1.0, 0.18))
 
-	# 3. Render Rain if applicable
+	# 4. Slanted Raindrops
 	if weather_type == WeatherType.RAINY or weather_type == WeatherType.THUNDER:
 		for r in raindrops:
-			draw_line(Vector2(r["x"], r["y"]), Vector2(r["x"] - 2.0, r["y"] + r["length"]), Color(0.7, 0.85, 1.0, 0.6), 1.5)
+			draw_line(Vector2(r["x"], r["y"]), Vector2(r["x"] - 3.0, r["y"] + r["length"]), Color(0.75, 0.88, 1.0, 0.55), 1.6)
 
-	# 4. Google Weather Search Bar UI
-	var search_bg = Rect2(40.0, 20.0, screen_size.x - 80.0, 48.0)
-	draw_rect(search_bg, Color(1.0, 1.0, 1.0, 0.92), true)
-	draw_rect(search_bg, Color(0.8, 0.85, 0.9, 1.0), false, 1.5)
-	
-	var search_display = "🔍 Search city (e.g., London, Tokyo)..." if search_query == "" else "🔍 " + search_query + ("_" if int(anim_timer * 2.0) % 2 == 0 else "")
-	draw_string(ThemeDB.fallback_font, Vector2(65.0, 50.0), search_display, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, Color(0.2, 0.2, 0.2))
+	var font = ThemeDB.fallback_font
+	if not font:
+		return
 
-	# 5. Quick City Selector Pills
-	var cities = ["Kohat", "Islamabad", "Peshawar", "Manila", "London", "New York"]
-	var start_x = 40.0
+	# 5. Search Bar UI
+	var search_rect = Rect2(20.0, 20.0, size.x - 40.0, 48.0)
+	draw_rect(search_rect, Color(1.0, 1.0, 1.0, 0.94), true)
+	draw_rect(search_rect, Color(0.75, 0.8, 0.88), false, 1.5)
+
+	var display_search = "🔍 Search city (e.g., London, Manila)..." if search_query == "" else "🔍 " + search_query + ("|" if int(anim_timer * 2.0) % 2 == 0 else "")
+	draw_string(font, Vector2(38.0, 50.0), display_search, HORIZONTAL_ALIGNMENT_LEFT, size.x - 70.0, 15, Color(0.2, 0.2, 0.25))
+
+	# 6. Quick City Pills
+	var cities = ["Kohat", "Peshawar", "Islamabad", "Manila", "London"]
+	var start_x = 20.0
 	for c in cities:
-		var pill = Rect2(start_x, 80.0, 95.0, 34.0)
+		var pill = Rect2(start_x, 80.0, 88.0, 32.0)
 		var is_selected = (c.to_lower() == current_city.to_lower())
-		draw_rect(pill, Color(1.0, 1.0, 1.0, 0.4 if not is_selected else 0.9), true)
-		draw_string(ThemeDB.fallback_font, Vector2(start_x + 12.0, 102.0), c, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14, Color(0.1, 0.1, 0.1) if is_selected else Color(1.0, 1.0, 1.0))
-		start_x += 105.0
+		draw_rect(pill, Color(1.0, 1.0, 1.0, 0.95 if is_selected else 0.32), true)
+		draw_string(font, Vector2(start_x + 10.0, 101.0), c, HORIZONTAL_ALIGNMENT_LEFT, 70.0, 13, Color(0.1, 0.1, 0.1) if is_selected else Color(1.0, 1.0, 1.0))
+		start_x += 94.0
 
-	# 6. Main Weather Hero Card (Google Style Glassmorphism)
-	var hero_card = Rect2(40.0, 130.0, screen_size.x - 80.0, 180.0)
-	draw_rect(hero_card, Color(0.0, 0.0, 0.0, 0.22), true)
-	draw_rect(hero_card, Color(1.0, 1.0, 1.0, 0.3), false, 1.5)
+	# 7. Hero Weather Display Card
+	var hero_rect = Rect2(20.0, 130.0, size.x - 40.0, 200.0)
+	draw_rect(hero_rect, Color(0.0, 0.0, 0.0, 0.22), true)
+	draw_rect(hero_rect, Color(1.0, 1.0, 1.0, 0.28), false, 1.5)
 
-	# City Name & Status
-	draw_string(ThemeDB.fallback_font, Vector2(65.0, 170.0), current_city + ", Pakistan" if current_city == "Kohat" else current_city, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 24, Color(1.0, 1.0, 1.0))
-	draw_string(ThemeDB.fallback_font, Vector2(65.0, 195.0), weather_condition_text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, Color(0.9, 0.95, 1.0))
+	var city_label = current_city + ", PK" if current_city == "Kohat" or current_city == "Peshawar" or current_city == "Islamabad" else current_city
+	draw_string(font, Vector2(42.0, 175.0), city_label, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 28, Color.WHITE)
+	draw_string(font, Vector2(42.0, 202.0), weather_condition_text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, Color(0.9, 0.95, 1.0))
+	draw_string(font, Vector2(42.0, 285.0), "%d°C" % current_temp, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 62, Color.WHITE)
 
-	# Big Temperature Number
-	draw_string(ThemeDB.fallback_font, Vector2(65.0, 265.0), "%d°C" % current_temp, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 56, Color(1.0, 1.0, 1.0))
+	# 8. Hourly Forecast Strip Card
+	var hourly_rect = Rect2(20.0, 350.0, size.x - 40.0, 115.0)
+	draw_rect(hourly_rect, Color(0.0, 0.0, 0.0, 0.2), true)
+	draw_rect(hourly_rect, Color(1.0, 1.0, 1.0, 0.15), false, 1.0)
+	draw_string(font, Vector2(35.0, 376.0), "HOURLY FORECAST", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, Color(0.88, 0.92, 1.0, 0.8))
 
-	# Weather Icon Graphic on right side of Hero Card
-	var icon_symbol = "☀️"
-	match weather_type:
-		WeatherType.CLOUDY: icon_symbol = "⛅"
-		WeatherType.RAINY: icon_symbol = "🌧️"
-		WeatherType.THUNDER: icon_symbol = "⛈️"
-		WeatherType.SNOW: icon_symbol = "❄️"
-	draw_string(ThemeDB.fallback_font, Vector2(screen_size.x - 140.0, 235.0), icon_symbol, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 64, Color(1.0, 1.0, 1.0))
-
-	# 7. Hourly Forecast Strip
-	var hourly_y = 330.0
-	draw_string(ThemeDB.fallback_font, Vector2(40.0, hourly_y), "HOURLY FORECAST", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14, Color(0.9, 0.95, 1.0, 0.8))
-	
-	var h_card = Rect2(40.0, hourly_y + 15.0, screen_size.x - 80.0, 90.0)
-	draw_rect(h_card, Color(0.0, 0.0, 0.0, 0.2), true)
-	
-	var h_x = 60.0
+	var h_x = 35.0
 	for h in hourly_forecast:
-		draw_string(ThemeDB.fallback_font, Vector2(h_x, hourly_y + 42.0), h["time"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, Color(0.8, 0.9, 1.0))
-		draw_string(ThemeDB.fallback_font, Vector2(h_x + 2.0, hourly_y + 68.0), h["icon"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 18, Color(1.0, 1.0, 1.0))
-		draw_string(ThemeDB.fallback_font, Vector2(h_x, hourly_y + 92.0), "%d°" % h["temp"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14, Color(1.0, 1.0, 1.0))
-		h_x += 75.0
+		draw_string(font, Vector2(h_x, 402.0), h["time"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, Color(0.8, 0.9, 1.0))
+		draw_string(font, Vector2(h_x + 2.0, 428.0), h["icon"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 17, Color.WHITE)
+		draw_string(font, Vector2(h_x + 2.0, 448.0), "%d°" % h["temp"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13, Color.WHITE)
+		h_x += 58.0
 
-	# 8. Detailed Weather Metrics Grid (Humidity, Wind, UV, AQI)
-	var grid_y = 450.0
-	var col_w = (screen_size.x - 95.0) * 0.5
-	
-	_draw_metric_card(Rect2(40.0, grid_y, col_w, 75.0), "💧 HUMIDITY", "%d%%" % humidity, "The dew point is 18° right now.")
-	_draw_metric_card(Rect2(55.0 + col_w, grid_y, col_w, 75.0), "💨 WIND", "%.1f km/h" % wind_speed, "Light breeze from Northwest.")
-	_draw_metric_card(Rect2(40.0, grid_y + 88.0, col_w, 75.0), "☀️ UV INDEX", "%d of 10" % uv_index, "Low sun protection recommended.")
-	_draw_metric_card(Rect2(55.0 + col_w, grid_y + 88.0, col_w, 75.0), "🍃 AIR QUALITY", air_quality, "Air quality is satisfactory.")
-
-	# 9. Notification Toast Banner
-	if notification_timer > 0.0:
-		notification_timer -= get_process_delta_time()
-		var toast_rect = Rect2(40.0, screen_size.y - 70.0, screen_size.x - 80.0, 44.0)
-		draw_rect(toast_rect, Color(0.1, 0.12, 0.18, 0.95), true)
-		draw_rect(toast_rect, Color(0.0, 0.85, 1.0, 1.0), false, 1.5)
-		draw_string(ThemeDB.fallback_font, Vector2(60.0, screen_size.y - 42.0), "🔔 " + notification_text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 15, Color(1.0, 1.0, 1.0))
+	# 9. Metrics Grid (2x2 Cards)
+	var card_w = (size.x - 52.0) * 0.5
+	_draw_metric_card(Rect2(20.0, 480.0, card_w, 82.0), "💧 HUMIDITY", "%d%%" % humidity, "Dew point normal")
+	_draw_metric_card(Rect2(32.0 + card_w, 480.0, card_w, 82.0), "💨 WIND", "%.1f km/h" % wind_speed, "Light breeze")
+	_draw_metric_card(Rect2(20.0, 574.0, card_w, 82.0), "☀️ UV INDEX", "%d of 10" % uv_index, "Low risk")
+	_draw_metric_card(Rect2(32.0 + card_w, 574.0, card_w, 82.0), "🍃 AIR QUALITY", air_quality, "Satisfactory")
 
 
-func _draw_metric_card(rect: Rect2, title: String, val: String, subtitle: String) -> void:
+func _draw_metric_card(rect: Rect2, title: String, val: String, sub: String) -> void:
+	var font = ThemeDB.fallback_font
 	draw_rect(rect, Color(0.0, 0.0, 0.0, 0.2), true)
-	draw_rect(rect, Color(1.0, 1.0, 1.0, 0.15), false, 1.0)
-	draw_string(ThemeDB.fallback_font, Vector2(rect.position.x + 14.0, rect.position.y + 22.0), title, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, Color(0.85, 0.9, 1.0, 0.8))
-	draw_string(ThemeDB.fallback_font, Vector2(rect.position.x + 14.0, rect.position.y + 48.0), val, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 18, Color(1.0, 1.0, 1.0))
-	draw_string(ThemeDB.fallback_font, Vector2(rect.position.x + 14.0, rect.position.y + 64.0), subtitle, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, Color(0.75, 0.85, 0.95, 0.7))
+	draw_rect(rect, Color(1.0, 1.0, 1.0, 0.18), false, 1.0)
+	if font:
+		draw_string(font, Vector2(rect.position.x + 12.0, rect.position.y + 22.0), title, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, Color(0.8, 0.9, 1.0, 0.8))
+		draw_string(font, Vector2(rect.position.x + 12.0, rect.position.y + 48.0), val, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, Color.WHITE)
+		draw_string(font, Vector2(rect.position.x + 12.0, rect.position.y + 68.0), sub, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, Color(0.75, 0.85, 0.95, 0.7))
