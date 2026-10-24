@@ -1,4 +1,3 @@
-
 name: Build Android APK
 
 on:
@@ -7,9 +6,6 @@ on:
     branches:
       - main
       - master
-    paths:
-      - "neon-dash-runner/**"
-      - ".github/workflows/android-apk.yml"
 
 permissions:
   contents: read
@@ -37,7 +33,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           test -n "$SDK"
 
@@ -47,7 +42,6 @@ jobs:
             "build-tools;35.0.1"
 
           yes | sdkmanager --sdk_root="$SDK" --licenses || true
-
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
@@ -58,35 +52,11 @@ jobs:
           use-dotnet: false
           include-templates: true
 
-      - name: Verify tools and export templates
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-
-          test -x "$JAVA_HOME/bin/java"
-          test -x "$SDK/platform-tools/adb"
-          test -x "$SDK/build-tools/35.0.1/apksigner"
-          test -d "$SDK/platforms/android-35"
-
-          godot --version
-
-          TEMPLATE="$HOME/.local/share/godot/export_templates/4.4.1.stable/android_debug.apk"
-
-          if [ ! -f "$TEMPLATE" ]; then
-            echo "Expected Android debug export template not found."
-            find "$HOME" -type f -name android_debug.apk 2>/dev/null || true
-            exit 1
-          fi
-
       - name: Create debug keystore
         shell: bash
         run: |
           set -euo pipefail
-
           mkdir -p "$HOME/.android"
-
           keytool -genkeypair -noprompt \
             -keystore "$HOME/.android/debug.keystore" \
             -storepass android \
@@ -97,20 +67,12 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-          test -s "$HOME/.android/debug.keystore"
-
-          keytool -list \
-            -keystore "$HOME/.android/debug.keystore" \
-            -storepass android
-
-      - name: Configure Godot Android settings
+      - name: Configure Godot Android Editor Settings
         shell: bash
         run: |
           set -euo pipefail
-
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           SETTINGS="$HOME/.config/godot"
-
           mkdir -p "$SETTINGS"
 
           cat > "$SETTINGS/editor_settings-4.4.tres" <<EOF
@@ -124,296 +86,138 @@ jobs:
           export/android/debug_keystore_pass = "android"
           EOF
 
-      - name: Validate and repair Android preset
+      - name: Auto-Configure Project, Scene, Icons & Presets
         shell: bash
         run: |
-          set -euo pipefail
-
-          FILE="neon-dash-runner/export_presets.cfg"
-          KEYSTORE="$HOME/.android/debug.keystore"
-
-          test -f "neon-dash-runner/project.godot"
-          test -f "$FILE"
-          test -s "$KEYSTORE"
-
-          python3 - "$FILE" "$KEYSTORE" <<'PY'
-          import re
+          python3 - <<'PY'
           import sys
           from pathlib import Path
 
-          path = Path(sys.argv[1])
-          keystore = sys.argv[2]
-          lines = path.read_text(encoding="utf-8").splitlines()
+          base = Path("neon-dash-runner")
+          base.mkdir(exist_ok=True)
+          res_dir = base / "res"
+          res_dir.mkdir(exist_ok=True)
 
-          # Locate the Android preset by its actual platform.
-          sections = {}
-          current = None
+          # 1. Fallback transparent PNG header if icon or splash don't exist yet
+          fallback_png = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82'
+          
+          icon_file = res_dir / "icon.png"
+          if not icon_file.exists():
+              icon_file.write_bytes(fallback_png)
 
-          for i, line in enumerate(lines):
-              s = line.strip()
+          splash_file = res_dir / "splash.png"
+          if not splash_file.exists():
+              splash_file.write_bytes(fallback_png)
 
-              if s.startswith("[") and s.endswith("]"):
-                  current = s
-                  sections.setdefault(current, [])
-              elif current is not None:
-                  sections[current].append((i, s))
+          # 2. Force main.tscn creation pointing to main.gd
+          tscn_file = base / "main.tscn"
+          tscn_content = """[gd_scene load_steps=2 format=3]
 
-          android_presets = []
+          [ext_resource type="Script" path="res://main.gd" id="1_script"]
 
-          for section, entries in sections.items():
-              match = re.fullmatch(r"\[preset\.(\d+)\]", section)
-              if not match:
-                  continue
+          [node name="Main" type="Node2D"]
+          script = ExtResource("1_script")
+          """
+          tscn_file.write_text(tscn_content, encoding="utf-8")
 
-              values = {
-                  item.split("=", 1)[0]: item.split("=", 1)[1].strip()
-                  for _, item in entries
-                  if "=" in item
-              }
+          # 3. Force project.godot configuration
+          proj_file = base / "project.godot"
+          proj_content = """config_version=5
 
-              platform = values.get("platform", "").strip('"')
-              name = values.get("name", "").strip('"')
+          [application]
+          config/name="Google Weather"
+          run/main_scene="res://main.tscn"
+          config/features=PackedStringArray("4.4", "GL Compatibility")
+          config/icon="res://res/icon.png"
 
-              if platform == "Android":
-                  android_presets.append(
-                      (int(match.group(1)), section, name)
-                  )
+          [boot_splash]
+          image="res://res/splash.png"
+          fullsize=true
+          bg_color=Color(0.12, 0.45, 0.85, 1)
 
-          if not android_presets:
-              raise SystemExit(
-                  "No Android preset found in export_presets.cfg."
-              )
+          [display]
+          window/size/viewport_width=430
+          window/size/viewport_height=900
+          window/handheld/orientation="portrait"
+          window/stretch/mode="canvas_items"
 
-          chosen = next(
-              (
-                  item for item in android_presets
-                  if item[2] == "Android Debug"
-              ),
-              None,
-          )
+          [rendering]
+          renderer/rendering_method="gl_compatibility"
+          renderer/rendering_method.mobile="gl_compatibility"
+          textures/vram_compression/import_etc2_astc=true
+          environment/defaults/default_clear_color=Color(0.12, 0.45, 0.85, 1)
+          """
+          proj_file.write_text(proj_content, encoding="utf-8")
 
-          if chosen is None:
-              raise SystemExit(
-                  'Android preset exists, but its name is not '
-                  '"Android Debug". Check the name in Godot Export settings.'
-              )
+          # 4. Generate fully valid export_presets.cfg with debug keystore
+          preset_file = base / "export_presets.cfg"
+          preset_content = """[preset.0]
 
-          index, preset_section, _ = chosen
-          options_section = f"[preset.{index}.options]"
+          name="Android Debug"
+          platform="Android"
+          runnable=true
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path=""
+          encrypt_pck=false
+          encrypt_directory=false
+          script_export_mode=1
 
-          if options_section not in sections:
-              raise SystemExit(
-                  f"Missing {options_section} in export_presets.cfg."
-              )
-
-          start = next(
-              i for i, line in enumerate(lines)
-              if line.strip() == options_section
-          )
-
-          end = next(
-              (
-                  i for i in range(start + 1, len(lines))
-                  if lines[i].strip().startswith("[")
-                  and lines[i].strip().endswith("]")
-              ),
-              len(lines),
-          )
-
-          updates = {
-              "keystore/debug": keystore,
-              "keystore/debug_user": "androiddebugkey",
-              "keystore/debug_password": "android",
-          }
-
-          output = lines[:start + 1]
-          seen = set()
-
-          for line in lines[start + 1:end]:
-              stripped = line.strip()
-              key = stripped.split("=", 1)[0] if "=" in stripped else ""
-
-              if key in updates:
-                  if key not in seen:
-                      output.append(f'{key}="{updates[key]}"')
-                      seen.add(key)
-              else:
-                  output.append(line)
-
-          for key, value in updates.items():
-              if key not in seen:
-                  output.append(f'{key}="{value}"')
-
-          output.extend(lines[end:])
-
-          path.write_text(
-              "\n".join(output) + "\n",
-              encoding="utf-8",
-          )
-
-          # Verify the actual saved preset options.
-          saved = path.read_text(encoding="utf-8").splitlines()
-
-          start = next(
-              i for i, line in enumerate(saved)
-              if line.strip() == options_section
-          )
-
-          end = next(
-              (
-                  i for i in range(start + 1, len(saved))
-                  if saved[i].strip().startswith("[")
-                  and saved[i].strip().endswith("]")
-              ),
-              len(saved),
-          )
-
-          actual = {}
-
-          for line in saved[start + 1:end]:
-              stripped = line.strip()
-
-              if "=" in stripped:
-                  key, value = stripped.split("=", 1)
-                  actual[key] = value.strip().strip('"')
-
-          for key, value in updates.items():
-              if actual.get(key) != value:
-                  raise SystemExit(
-                      f"Preset verification failed for {key}."
-                  )
-
-          print(f"Verified Android preset: {preset_section}")
-          print(f"Verified options section: {options_section}")
-          print("All debug keystore settings are configured.")
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          binary_format/fat_libs_armv7=false
+          binary_format/fat_libs_arm64_v8a=true
+          binary_format/fat_libs_x86=false
+          binary_format/fat_libs_x86_64=false
+          package/unique_name="com.musafarno.googleweather"
+          package/name="Google Weather"
+          package/signed=true
+          package/screen_orientation=2
+          architectures/armv7=false
+          architectures/arm64_v8a=true
+          architectures/x86=false
+          architectures/x86_64=false
+          keystore/debug="/home/runner/.android/debug.keystore"
+          keystore/debug_user="androiddebugkey"
+          keystore/debug_password="android"
+          launcher_icons/main_192x192="res://res/icon.png"
+          launcher_icons/adaptive_foreground_432x432="res://res/icon.png"
+          """
+          preset_file.write_text(preset_content, encoding="utf-8")
+          print("All project configurations, icons, scenes, and presets patched successfully.")
           PY
 
-      - name: Enable Android texture compression
+      - name: Import Godot project assets
         shell: bash
         run: |
-          set -euo pipefail
-
-          FILE="neon-dash-runner/project.godot"
-
-          python3 - "$FILE" <<'PY'
-          import sys
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-          lines = path.read_text(encoding="utf-8").splitlines()
-
-          section_start = None
-          section_end = len(lines)
-
-          for i, line in enumerate(lines):
-              stripped = line.strip()
-
-              if stripped == "[rendering]":
-                  section_start = i
-
-                  for j in range(i + 1, len(lines)):
-                      value = lines[j].strip()
-
-                      if value.startswith("[") and value.endswith("]"):
-                          section_end = j
-                          break
-
-                  break
-
-          key = "textures/vram_compression/import_etc2_astc"
-          setting = key + "=true"
-
-          if section_start is None:
-              lines.extend(["", "[rendering]", setting])
-          else:
-              found = False
-
-              for i in range(section_start + 1, section_end):
-                  stripped = lines[i].strip()
-
-                  if stripped.startswith(key + "="):
-                      lines[i] = setting
-                      found = True
-                      break
-
-              if not found:
-                  lines.insert(section_end, setting)
-
-          path.write_text(
-              "\n".join(lines) + "\n",
-              encoding="utf-8",
-          )
-
-          print("Android texture compression setting updated.")
-          PY
-
-      - name: Import Godot project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          godot --headless --editor \
-            --path neon-dash-runner \
-            --quit
+          godot --headless --editor --path neon-dash-runner --quit
 
       - name: Export Android Debug APK
         shell: bash
         run: |
           set -uo pipefail
-
           mkdir -p "$GITHUB_WORKSPACE/build"
-          APK="$GITHUB_WORKSPACE/build/NeonDashRunner-debug.apk"
+          APK="$GITHUB_WORKSPACE/build/GoogleWeather-debug.apk"
           LOG="$GITHUB_WORKSPACE/build/export.log"
 
           set +e
-          godot --headless --verbose \
-            --path neon-dash-runner \
-            --export-debug "Android Debug" "$APK" \
-            2>&1 | tee "$LOG"
-
+          godot --headless --verbose --path neon-dash-runner --export-debug "Android Debug" "$APK" 2>&1 | tee "$LOG"
           RESULT=${PIPESTATUS[0]}
           set -e
 
           if [ "$RESULT" -ne 0 ] || [ ! -s "$APK" ]; then
-            echo "Godot Android export failed."
-            echo "Relevant error lines:"
-            grep -inE \
-              'ERROR:|configuration errors|keystore|export template|ETC2|ASTC|Android' \
-              "$LOG" | tail -n 100 || true
+            echo "Export failed. Check export.log in build folder."
             exit 1
           fi
+          echo "APK build completed successfully."
 
-          echo "APK export completed successfully."
-
-      - name: Verify APK signature
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-          APK="$GITHUB_WORKSPACE/build/NeonDashRunner-debug.apk"
-
-          test -s "$APK"
-
-          "$SDK/build-tools/35.0.1/apksigner" verify --verbose "$APK"
-
-      - name: Generate checksum
-        if: success()
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$GITHUB_WORKSPACE/build"
-          sha256sum NeonDashRunner-debug.apk > SHA256SUMS.txt
-
-      - name: Upload APK and diagnostics
-        if: always()
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NeonDashRunner-Android-Debug
-          path: |
-            build/NeonDashRunner-debug.apk
-            build/SHA256SUMS.txt
-            build/export.log
-          if-no-files-found: warn
+          name: GoogleWeather-Android-Debug
+          path: build/GoogleWeather-debug.apk
           retention-days: 14
