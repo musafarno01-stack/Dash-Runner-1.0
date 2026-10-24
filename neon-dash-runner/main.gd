@@ -1,209 +1,200 @@
-extends Node2D
+extends Control
 
-enum WeatherType { SUNNY, CLOUDY, RAINY, THUNDER, SNOW }
-
-# Live Selected City State
-var current_city: String = "Kohat"
-var current_temp: int = 32
-var weather_condition_text: String = "Sunny & Clear"
-var humidity: int = 42
-var wind_speed: float = 12.5
-var uv_index: int = 5
-var air_quality: String = "Good"
-
-var is_searching: bool = false
-var search_query: String = ""
-var anim_timer: float = 0.0
+var city_input: LineEdit
+var city_title_label: Label
+var temp_label: Label
+var condition_label: Label
+var humidity_val_label: Label
+var wind_val_label: Label
+var uv_val_label: Label
+var aqi_val_label: Label
 var http_request: HTTPRequest
 
-var raindrops: Array[Dictionary] = []
-var clouds: Array[Dictionary] = []
-
-var hourly_forecast = [
-	{"time": "Now", "temp": 32, "icon": "☀️"},
-	{"time": "1 PM", "temp": 34, "icon": "☀️"},
-	{"time": "2 PM", "temp": 35, "icon": "🌤️"},
-	{"time": "3 PM", "temp": 34, "icon": "⛅"},
-	{"time": "4 PM", "temp": 32, "icon": "⛅"},
-	{"time": "5 PM", "temp": 30, "icon": "🌥️"}
-]
+var current_city: String = "Kohat"
 
 
 func _ready() -> void:
-	# Initialize HTTP Request node for live weather fetching
+	# Configure root node as full rect container
+	anchor_right = 1.0
+	anchor_bottom = 1.0
+	
+	# Apply professional Google Weather background gradient panel
+	var bg_panel = Panel.new()
+	bg_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	var bg_style = StyleBoxFlat.new()
+	bg_style.bg_color = Color(0.12, 0.45, 0.88) # Google Weather Sky Blue
+	bg_panel.add_theme_stylebox_override("panel", bg_style)
+	add_child(bg_panel)
+
+	# Main Vertical Scroll/Layout Container
+	var margin = MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 20)
+	margin.add_theme_constant_override("margin_right", 20)
+	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_bottom", 20)
+	add_child(margin)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 16)
+	margin.add_child(vbox)
+
+	# 1. Search Bar (LineEdit)
+	city_input = LineEdit.new()
+	city_input.placeholder_text = "🔍 Search city (e.g., London, Manila, Kohat)..."
+	city_input.custom_minimum_size = Vector2(0, 52)
+	var search_style = StyleBoxFlat.new()
+	search_style.bg_color = Color(1, 1, 1, 0.95)
+	search_style.corner_radius_top_left = 26
+	search_style.corner_radius_top_right = 26
+	search_style.corner_radius_bottom_left = 26
+	search_style.corner_radius_bottom_right = 26
+	search_style.content_margin_left = 20
+	city_input.add_theme_stylebox_override("normal", search_style)
+	city_input.add_theme_stylebox_override("focus", search_style)
+	city_input.add_theme_color_override("font_color", Color(0.1, 0.1, 0.1))
+	city_input.add_theme_color_override("font_placeholder_color", Color(0.4, 0.4, 0.4))
+	city_input.text_submitted.connect(_on_search_submitted)
+	vbox.add_child(city_input)
+
+	# 2. Quick Location Pills Row
+	var pills_hbox = HBoxContainer.new()
+	pills_hbox.add_theme_constant_override("separation", 8)
+	vbox.add_child(pills_hbox)
+
+	for c in ["Kohat", "Peshawar", "Islamabad", "London"]:
+		var btn = Button.new()
+		btn.text = c
+		btn.custom_minimum_size = Vector2(80, 36)
+		var btn_style = StyleBoxFlat.new()
+		btn_style.bg_color = Color(1, 1, 1, 0.3)
+		btn_style.corner_radius_top_left = 18
+		btn_style.corner_radius_top_right = 18
+		btn_style.corner_radius_bottom_left = 18
+		btn_style.corner_radius_bottom_right = 18
+		btn.add_theme_stylebox_override("normal", btn_style)
+		btn.add_theme_color_override("font_color", Color.WHITE)
+		btn.pressed.connect(func(): _fetch_weather(c))
+		pills_hbox.add_child(btn)
+
+	# 3. Main Weather Hero Card (Glassmorphism Panel)
+	var hero_panel = Panel.new()
+	hero_panel.custom_minimum_size = Vector2(0, 190)
+	var hero_style = StyleBoxFlat.new()
+	hero_style.bg_color = Color(0, 0, 0, 0.22)
+	hero_style.corner_radius_top_left = 20
+	hero_style.corner_radius_top_right = 20
+	hero_style.corner_radius_bottom_left = 20
+	hero_style.corner_radius_bottom_right = 20
+	hero_style.content_margin_left = 24
+	hero_style.content_margin_top = 20
+	hero_panel.add_theme_stylebox_override("panel", hero_style)
+	vbox.add_child(hero_panel)
+
+	var hero_vbox = VBoxContainer.new()
+	hero_vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hero_panel.add_child(hero_vbox)
+
+	city_title_label = Label.new()
+	city_title_label.text = "Kohat, PK"
+	city_title_label.add_theme_font_size_override("font_size", 28)
+	city_title_label.add_theme_color_override("font_color", Color.WHITE)
+	hero_vbox.add_child(city_title_label)
+
+	condition_label = Label.new()
+	condition_label.text = "Sunny & Clear"
+	condition_label.add_theme_font_size_override("font_size", 16)
+	condition_label.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
+	hero_vbox.add_child(condition_label)
+
+	temp_label = Label.new()
+	temp_label.text = "32°C"
+	temp_label.add_theme_font_size_override("font_size", 54)
+	temp_label.add_theme_color_override("font_color", Color.WHITE)
+	hero_vbox.add_child(temp_label)
+
+	# 4. Metrics Grid (2x2 Cards)
+	var grid = GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
+	vbox.add_child(grid)
+
+	humidity_val_label = _create_metric_card(grid, "💧 HUMIDITY", "42%")
+	wind_val_label = _create_metric_card(grid, "💨 WIND", "12.5 km/h")
+	uv_val_label = _create_metric_card(grid, "☀️ UV INDEX", "5 of 10")
+	aqi_val_label = _create_metric_card(grid, "🍃 AIR QUALITY", "Good (42)")
+
+	# Setup HTTP Request for Live Weather
 	http_request = HTTPRequest.new()
 	add_child(http_request)
-	http_request.request_completed.connect(_on_weather_request_completed)
+	http_request.request_completed.connect(_on_request_completed)
 
-	_init_particles()
-	
-	# Automatically fetch weather for current default location (Kohat)
-	_fetch_weather_data("Kohat")
-	queue_redraw()
+	# Fetch initial location weather
+	_fetch_weather("Kohat")
 
 
-func _init_particles() -> void:
-	clouds.clear()
-	raindrops.clear()
-	for i in range(10):
-		clouds.append({
-			"x": randf_range(-100.0, 500.0),
-			"y": randf_range(30.0, 180.0),
-			"speed": randf_range(5.0, 15.0),
-			"size": randf_range(30.0, 60.0)
-		})
-	for i in range(30):
-		raindrops.append({
-			"x": randf_range(0.0, 500.0),
-			"y": randf_range(0.0, 950.0),
-			"speed": randf_range(400.0, 700.0),
-			"length": randf_range(12.0, 22.0)
-		})
+func _create_metric_card(parent: Control, title: String, initial_val: String) -> Label:
+	var panel = Panel.new()
+	panel.custom_minimum_size = Vector2(180, 85)
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(0, 0, 0, 0.2)
+	style.corner_radius_top_left = 16
+	style.corner_radius_top_right = 16
+	style.corner_radius_bottom_left = 16
+	style.corner_radius_bottom_right = 16
+	style.content_margin_left = 16
+	style.content_margin_top = 14
+	panel.add_theme_stylebox_override("panel", style)
+	parent.add_child(panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	panel.add_child(vbox)
+
+	var title_lbl = Label.new()
+	title_lbl.text = title
+	title_lbl.add_theme_font_size_override("font_size", 11)
+	title_lbl.add_theme_color_override("font_color", Color(0.8, 0.9, 1.0, 0.8))
+	vbox.add_child(title_lbl)
+
+	var val_lbl = Label.new()
+	val_lbl.text = initial_val
+	val_lbl.add_theme_font_size_override("font_size", 18)
+	val_lbl.add_theme_color_override("font_color", Color.WHITE)
+	vbox.add_child(val_lbl)
+
+	return val_lbl
 
 
-func _fetch_weather_data(city_name: String) -> void:
+func _on_search_submitted(new_text: String) -> void:
+	if new_text.strip_edges() != "":
+		_fetch_weather(new_text)
+		city_input.release_focus()
+
+
+func _fetch_weather(city_name: String) -> void:
 	current_city = city_name.capitalize()
+	city_title_label.text = current_city + ", PK"
+	condition_label.text = "Fetching live weather..."
+	
 	var url = "https://wttr.in/%s?format=j1" % city_name.uri_encode()
-	var error = http_request.request(url)
-	if error != OK:
-		print("Failed to dispatch weather request.")
+	http_request.request(url)
 
 
-func _on_weather_request_completed(result: int, response_code: int, headers: PackedStringArray, body: PackedByteArray) -> void:
+func _on_request_completed(result: int, response_code: int, headers: PackedStringArray, body: PackedByteArray) -> void:
 	if response_code == 200:
 		var json = JSON.new()
-		var parse_result = json.parse(body.get_string_from_utf8())
-		if parse_result == OK:
+		if json.parse(body.get_string_from_utf8()) == OK:
 			var data = json.get_data()
-			if data and data is Dictionary:
-				if data.has("current_condition") and data["current_condition"].size() > 0:
-					var cond = data["current_condition"][0]
-					current_temp = int(cond.get("temp_C", "32"))
-					wind_speed = float(cond.get("windspeedKmph", "12"))
-					humidity = int(cond.get("humidity", "45"))
-					
-					if cond.has("weatherDesc") and cond["weatherDesc"].size() > 0:
-						weather_condition_text = str(cond["weatherDesc"][0].get("value", "Clear"))
-				queue_redraw()
+			if data and data is Dictionary and data.has("current_condition"):
+				var cond = data["current_condition"][0]
+				var t = cond.get("temp_C", "30")
+				var desc = cond["weatherDesc"][0].get("value", "Clear")
+				var hum = cond.get("humidity", "40")
+				var wind = cond.get("windspeedKmph", "10")
 
-
-func _process(delta: float) -> void:
-	anim_timer += delta
-
-	for c in clouds:
-		c["x"] += c["speed"] * delta
-		if c["x"] > 520.0:
-			c["x"] = -100.0
-
-	queue_redraw()
-
-
-func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo:
-		if is_searching:
-			if event.keycode == KEY_BACKSPACE and search_query.length() > 0:
-				search_query = search_query.left(search_query.length() - 1)
-			elif event.keycode == KEY_ENTER or event.keycode == KEY_RETURN:
-				_fetch_weather_data(search_query)
-				is_searching = false
-				search_query = ""
-			elif event.unicode > 31:
-				search_query += char(event.unicode)
-
-	if event is InputEventScreenTouch and event.pressed:
-		_handle_click(event.position)
-	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_handle_click(event.position)
-
-
-func _handle_click(pos: Vector2) -> void:
-	var screen_w = get_viewport_rect().size.x
-
-	# Search bar touch area
-	if Rect2(20.0, 20.0, screen_w - 40.0, 48.0).has_point(pos):
-		is_searching = true
-		return
-
-	# Quick City Pill Buttons (Kohat is set as primary location shortcut)
-	var cities = ["Kohat", "Peshawar", "Islamabad", "London", "Tokyo"]
-	var start_x = 20.0
-	for c in cities:
-		var pill_rect = Rect2(start_x, 80.0, 78.0, 32.0)
-		if pill_rect.has_point(pos):
-			_fetch_weather_data(c)
-			is_searching = false
-			return
-		start_x += 84.0
-
-
-func _draw() -> void:
-	var size = get_viewport_rect().size
-	if size.x <= 0 or size.y <= 0:
-		return
-
-	# Background Sky Gradient
-	draw_rect(Rect2(Vector2.ZERO, size), Color(0.12, 0.45, 0.85))
-
-	# Sun Graphic
-	var sun_center = Vector2(size.x - 70.0, 175.0)
-	draw_circle(sun_center, 42.0, Color(1.0, 0.9, 0.4, 0.9))
-
-	var font = ThemeDB.fallback_font
-	if not font:
-		return
-
-	# Search Bar UI
-	var search_rect = Rect2(20.0, 20.0, size.x - 40.0, 48.0)
-	draw_rect(search_rect, Color(1.0, 1.0, 1.0, 0.94), true)
-	draw_rect(search_rect, Color(0.75, 0.8, 0.88), false, 1.5)
-
-	var display_search = "📍 Search location or city..." if search_query == "" else "🔍 " + search_query + ("|" if int(anim_timer * 2.0) % 2 == 0 else "")
-	draw_string(font, Vector2(38.0, 50.0), display_search, HORIZONTAL_ALIGNMENT_LEFT, size.x - 70.0, 15, Color(0.2, 0.2, 0.25))
-
-	# Quick Location Pills (Kohat is first)
-	var cities = ["Kohat", "Peshawar", "Islamabad", "London", "Tokyo"]
-	var start_x = 20.0
-	for c in cities:
-		var pill = Rect2(start_x, 80.0, 78.0, 32.0)
-		var is_selected = (c.to_lower() == current_city.to_lower())
-		draw_rect(pill, Color(1.0, 1.0, 1.0, 0.95 if is_selected else 0.32), true)
-		draw_string(font, Vector2(start_x + 8.0, 101.0), c, HORIZONTAL_ALIGNMENT_LEFT, 70.0, 12, Color(0.1, 0.1, 0.1) if is_selected else Color(1.0, 1.0, 1.0))
-		start_x += 84.0
-
-	# Hero Weather Display Card
-	var hero_rect = Rect2(20.0, 130.0, size.x - 40.0, 200.0)
-	draw_rect(hero_rect, Color(0.0, 0.0, 0.0, 0.22), true)
-	draw_rect(hero_rect, Color(1.0, 1.0, 1.0, 0.28), false, 1.5)
-
-	draw_string(font, Vector2(42.0, 175.0), current_city + ", PK" if current_city == "Kohat" else current_city, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 28, Color.WHITE)
-	draw_string(font, Vector2(42.0, 202.0), weather_condition_text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, Color(0.9, 0.95, 1.0))
-	draw_string(font, Vector2(42.0, 285.0), "%d°C" % current_temp, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 62, Color.WHITE)
-
-	# Hourly Forecast Strip Card
-	var hourly_rect = Rect2(20.0, 350.0, size.x - 40.0, 115.0)
-	draw_rect(hourly_rect, Color(0.0, 0.0, 0.0, 0.2), true)
-	draw_string(font, Vector2(35.0, 376.0), "HOURLY FORECAST", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, Color(0.88, 0.92, 1.0, 0.8))
-
-	var h_x = 35.0
-	for h in hourly_forecast:
-		draw_string(font, Vector2(h_x, 402.0), h["time"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, Color(0.8, 0.9, 1.0))
-		draw_string(font, Vector2(h_x + 2.0, 428.0), h["icon"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 17, Color.WHITE)
-		draw_string(font, Vector2(h_x + 2.0, 448.0), "%d°" % h["temp"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13, Color.WHITE)
-		h_x += 58.0
-
-	# Metrics Grid Cards
-	var card_w = (size.x - 52.0) * 0.5
-	_draw_metric_card(Rect2(20.0, 480.0, card_w, 82.0), "💧 HUMIDITY", "%d%%" % humidity, "Normal levels")
-	_draw_metric_card(Rect2(32.0 + card_w, 480.0, card_w, 82.0), "💨 WIND", "%.1f km/h" % wind_speed, "Breeze active")
-	_draw_metric_card(Rect2(20.0, 574.0, card_w, 82.0), "☀️ UV INDEX", "%d of 10" % uv_index, "Low risk")
-	_draw_metric_card(Rect2(32.0 + card_w, 574.0, card_w, 82.0), "🍃 AIR QUALITY", air_quality, "Satisfactory")
-
-
-func _draw_metric_card(rect: Rect2, title: String, val: String, sub: String) -> void:
-	var font = ThemeDB.fallback_font
-	draw_rect(rect, Color(0.0, 0.0, 0.0, 0.2), true)
-	draw_rect(rect, Color(1.0, 1.0, 1.0, 0.18), false, 1.0)
-	if font:
-		draw_string(font, Vector2(rect.position.x + 12.0, rect.position.y + 22.0), title, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, Color(0.8, 0.9, 1.0, 0.8))
-		draw_string(font, Vector2(rect.position.x + 12.0, rect.position.y + 48.0), val, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, Color.WHITE)
-		draw_string(font, Vector2(rect.position.x + 12.0, rect.position.y + 68.0), sub, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, Color(0.75, 0.85, 0.95, 0.7))
+				temp_label.text = str(t) + "°C"
+				condition_label.text = str(desc)
+				humidity_val_label.text = str(hum) + "%"
+				wind_val_label.text = str(wind) + " km/h"
