@@ -5,17 +5,16 @@ enum WeatherType { SUNNY, CLOUDY, RAINY, THUNDER, SNOW }
 # Live Selected City State
 var current_city: String = "Kohat"
 var current_temp: int = 32
-var weather_type: WeatherType = WeatherType.SUNNY
-var weather_condition_text: String = "Mostly Sunny"
+var weather_condition_text: String = "Sunny & Clear"
 var humidity: int = 42
 var wind_speed: float = 12.5
-var uv_index: int = 6
-var air_quality: String = "Good (42 AQI)"
+var uv_index: int = 5
+var air_quality: String = "Good"
 
-# Search & State Handling
 var is_searching: bool = false
 var search_query: String = ""
 var anim_timer: float = 0.0
+var http_request: HTTPRequest
 
 var raindrops: Array[Dictionary] = []
 var clouds: Array[Dictionary] = []
@@ -26,51 +25,75 @@ var hourly_forecast = [
 	{"time": "2 PM", "temp": 35, "icon": "🌤️"},
 	{"time": "3 PM", "temp": 34, "icon": "⛅"},
 	{"time": "4 PM", "temp": 32, "icon": "⛅"},
-	{"time": "5 PM", "temp": 30, "icon": "🌥️"},
-	{"time": "6 PM", "temp": 28, "icon": "🌙"}
+	{"time": "5 PM", "temp": 30, "icon": "🌥️"}
 ]
 
 
 func _ready() -> void:
+	# Initialize HTTP Request node for live weather fetching
+	http_request = HTTPRequest.new()
+	add_child(http_request)
+	http_request.request_completed.connect(_on_weather_request_completed)
+
 	_init_particles()
+	
+	# Automatically fetch weather for current default location (Kohat)
+	_fetch_weather_data("Kohat")
 	queue_redraw()
 
 
 func _init_particles() -> void:
 	clouds.clear()
 	raindrops.clear()
-	for i in range(12):
+	for i in range(10):
 		clouds.append({
 			"x": randf_range(-100.0, 500.0),
-			"y": randf_range(30.0, 200.0),
-			"speed": randf_range(6.0, 18.0),
-			"size": randf_range(32.0, 65.0)
+			"y": randf_range(30.0, 180.0),
+			"speed": randf_range(5.0, 15.0),
+			"size": randf_range(30.0, 60.0)
 		})
-	for i in range(35):
+	for i in range(30):
 		raindrops.append({
 			"x": randf_range(0.0, 500.0),
 			"y": randf_range(0.0, 950.0),
-			"speed": randf_range(450.0, 750.0),
-			"length": randf_range(12.0, 24.0)
+			"speed": randf_range(400.0, 700.0),
+			"length": randf_range(12.0, 22.0)
 		})
+
+
+func _fetch_weather_data(city_name: String) -> void:
+	current_city = city_name.capitalize()
+	var url = "https://wttr.in/%s?format=j1" % city_name.uri_encode()
+	var error = http_request.request(url)
+	if error != OK:
+		print("Failed to dispatch weather request.")
+
+
+func _on_weather_request_completed(result: int, response_code: int, headers: PackedStringArray, body: PackedByteArray) -> void:
+	if response_code == 200:
+		var json = JSON.new()
+		var parse_result = json.parse(body.get_string_from_utf8())
+		if parse_result == OK:
+			var data = json.get_data()
+			if data and data is Dictionary:
+				if data.has("current_condition") and data["current_condition"].size() > 0:
+					var cond = data["current_condition"][0]
+					current_temp = int(cond.get("temp_C", "32"))
+					wind_speed = float(cond.get("windspeedKmph", "12"))
+					humidity = int(cond.get("humidity", "45"))
+					
+					if cond.has("weatherDesc") and cond["weatherDesc"].size() > 0:
+						weather_condition_text = str(cond["weatherDesc"][0].get("value", "Clear"))
+				queue_redraw()
 
 
 func _process(delta: float) -> void:
 	anim_timer += delta
 
-	# Move clouds
 	for c in clouds:
 		c["x"] += c["speed"] * delta
 		if c["x"] > 520.0:
 			c["x"] = -100.0
-
-	# Move rain if applicable
-	if weather_type == WeatherType.RAINY or weather_type == WeatherType.THUNDER:
-		for r in raindrops:
-			r["y"] += r["speed"] * delta
-			if r["y"] > 950.0:
-				r["y"] = -30.0
-				r["x"] = randf_range(0.0, 500.0)
 
 	queue_redraw()
 
@@ -81,7 +104,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.keycode == KEY_BACKSPACE and search_query.length() > 0:
 				search_query = search_query.left(search_query.length() - 1)
 			elif event.keycode == KEY_ENTER or event.keycode == KEY_RETURN:
-				_lookup_city(search_query)
+				_fetch_weather_data(search_query)
 				is_searching = false
 				search_query = ""
 			elif event.unicode > 31:
@@ -93,35 +116,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		_handle_click(event.position)
 
 
-func _lookup_city(city_name: String) -> void:
-	if city_name.strip_edges() == "":
-		return
-	current_city = city_name.capitalize()
-	
-	var hash_val = abs(current_city.hash()) % 4
-	match hash_val:
-		0:
-			weather_type = WeatherType.SUNNY
-			weather_condition_text = "Sunny & Clear"
-			current_temp = randi_range(30, 38)
-			humidity = 38
-		1:
-			weather_type = WeatherType.CLOUDY
-			weather_condition_text = "Partly Cloudy"
-			current_temp = randi_range(24, 29)
-			humidity = 58
-		2:
-			weather_type = WeatherType.RAINY
-			weather_condition_text = "Light Showers"
-			current_temp = randi_range(18, 23)
-			humidity = 84
-		3:
-			weather_type = WeatherType.THUNDER
-			weather_condition_text = "Thunderstorm"
-			current_temp = randi_range(16, 21)
-			humidity = 91
-
-
 func _handle_click(pos: Vector2) -> void:
 	var screen_w = get_viewport_rect().size.x
 
@@ -130,16 +124,16 @@ func _handle_click(pos: Vector2) -> void:
 		is_searching = true
 		return
 
-	# Quick City Pill Buttons
-	var cities = ["Kohat", "Peshawar", "Islamabad", "Manila", "London"]
+	# Quick City Pill Buttons (Kohat is set as primary location shortcut)
+	var cities = ["Kohat", "Peshawar", "Islamabad", "London", "Tokyo"]
 	var start_x = 20.0
 	for c in cities:
-		var pill_rect = Rect2(start_x, 80.0, 88.0, 32.0)
+		var pill_rect = Rect2(start_x, 80.0, 78.0, 32.0)
 		if pill_rect.has_point(pos):
-			_lookup_city(c)
+			_fetch_weather_data(c)
 			is_searching = false
 			return
-		start_x += 94.0
+		start_x += 84.0
 
 
 func _draw() -> void:
@@ -147,71 +141,47 @@ func _draw() -> void:
 	if size.x <= 0 or size.y <= 0:
 		return
 
-	# 1. Sky Color Gradient Based on Weather
-	var top_color = Color(0.12, 0.45, 0.85) # Sunny Sky
-	if weather_type == WeatherType.CLOUDY:
-		top_color = Color(0.28, 0.4, 0.55)
-	elif weather_type == WeatherType.RAINY:
-		top_color = Color(0.16, 0.25, 0.38)
-	elif weather_type == WeatherType.THUNDER:
-		top_color = Color(0.08, 0.12, 0.22)
+	# Background Sky Gradient
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0.12, 0.45, 0.85))
 
-	draw_rect(Rect2(Vector2.ZERO, size), top_color)
-
-	# 2. Animated Sun Rays or Sun Glow
-	if weather_type == WeatherType.SUNNY:
-		var sun_center = Vector2(size.x - 80.0, 180.0)
-		var glow_pulse = sin(anim_timer * 2.0) * 8.0
-		draw_circle(sun_center, 65.0 + glow_pulse, Color(1.0, 0.85, 0.3, 0.22))
-		draw_circle(sun_center, 45.0, Color(1.0, 0.9, 0.4, 0.85))
-
-	# 3. Clouds
-	if weather_type != WeatherType.SUNNY:
-		for c in clouds:
-			draw_circle(Vector2(c["x"], c["y"]), c["size"], Color(1.0, 1.0, 1.0, 0.22))
-			draw_circle(Vector2(c["x"] + 25.0, c["y"] + 8.0), c["size"] * 0.75, Color(1.0, 1.0, 1.0, 0.18))
-
-	# 4. Slanted Raindrops
-	if weather_type == WeatherType.RAINY or weather_type == WeatherType.THUNDER:
-		for r in raindrops:
-			draw_line(Vector2(r["x"], r["y"]), Vector2(r["x"] - 3.0, r["y"] + r["length"]), Color(0.75, 0.88, 1.0, 0.55), 1.6)
+	# Sun Graphic
+	var sun_center = Vector2(size.x - 70.0, 175.0)
+	draw_circle(sun_center, 42.0, Color(1.0, 0.9, 0.4, 0.9))
 
 	var font = ThemeDB.fallback_font
 	if not font:
 		return
 
-	# 5. Search Bar UI
+	# Search Bar UI
 	var search_rect = Rect2(20.0, 20.0, size.x - 40.0, 48.0)
 	draw_rect(search_rect, Color(1.0, 1.0, 1.0, 0.94), true)
 	draw_rect(search_rect, Color(0.75, 0.8, 0.88), false, 1.5)
 
-	var display_search = "🔍 Search city (e.g., London, Manila)..." if search_query == "" else "🔍 " + search_query + ("|" if int(anim_timer * 2.0) % 2 == 0 else "")
+	var display_search = "📍 Search location or city..." if search_query == "" else "🔍 " + search_query + ("|" if int(anim_timer * 2.0) % 2 == 0 else "")
 	draw_string(font, Vector2(38.0, 50.0), display_search, HORIZONTAL_ALIGNMENT_LEFT, size.x - 70.0, 15, Color(0.2, 0.2, 0.25))
 
-	# 6. Quick City Pills
-	var cities = ["Kohat", "Peshawar", "Islamabad", "Manila", "London"]
+	# Quick Location Pills (Kohat is first)
+	var cities = ["Kohat", "Peshawar", "Islamabad", "London", "Tokyo"]
 	var start_x = 20.0
 	for c in cities:
-		var pill = Rect2(start_x, 80.0, 88.0, 32.0)
+		var pill = Rect2(start_x, 80.0, 78.0, 32.0)
 		var is_selected = (c.to_lower() == current_city.to_lower())
 		draw_rect(pill, Color(1.0, 1.0, 1.0, 0.95 if is_selected else 0.32), true)
-		draw_string(font, Vector2(start_x + 10.0, 101.0), c, HORIZONTAL_ALIGNMENT_LEFT, 70.0, 13, Color(0.1, 0.1, 0.1) if is_selected else Color(1.0, 1.0, 1.0))
-		start_x += 94.0
+		draw_string(font, Vector2(start_x + 8.0, 101.0), c, HORIZONTAL_ALIGNMENT_LEFT, 70.0, 12, Color(0.1, 0.1, 0.1) if is_selected else Color(1.0, 1.0, 1.0))
+		start_x += 84.0
 
-	# 7. Hero Weather Display Card
+	# Hero Weather Display Card
 	var hero_rect = Rect2(20.0, 130.0, size.x - 40.0, 200.0)
 	draw_rect(hero_rect, Color(0.0, 0.0, 0.0, 0.22), true)
 	draw_rect(hero_rect, Color(1.0, 1.0, 1.0, 0.28), false, 1.5)
 
-	var city_label = current_city + ", PK" if current_city == "Kohat" or current_city == "Peshawar" or current_city == "Islamabad" else current_city
-	draw_string(font, Vector2(42.0, 175.0), city_label, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 28, Color.WHITE)
+	draw_string(font, Vector2(42.0, 175.0), current_city + ", PK" if current_city == "Kohat" else current_city, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 28, Color.WHITE)
 	draw_string(font, Vector2(42.0, 202.0), weather_condition_text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, Color(0.9, 0.95, 1.0))
 	draw_string(font, Vector2(42.0, 285.0), "%d°C" % current_temp, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 62, Color.WHITE)
 
-	# 8. Hourly Forecast Strip Card
+	# Hourly Forecast Strip Card
 	var hourly_rect = Rect2(20.0, 350.0, size.x - 40.0, 115.0)
 	draw_rect(hourly_rect, Color(0.0, 0.0, 0.0, 0.2), true)
-	draw_rect(hourly_rect, Color(1.0, 1.0, 1.0, 0.15), false, 1.0)
 	draw_string(font, Vector2(35.0, 376.0), "HOURLY FORECAST", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, Color(0.88, 0.92, 1.0, 0.8))
 
 	var h_x = 35.0
@@ -221,10 +191,10 @@ func _draw() -> void:
 		draw_string(font, Vector2(h_x + 2.0, 448.0), "%d°" % h["temp"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13, Color.WHITE)
 		h_x += 58.0
 
-	# 9. Metrics Grid (2x2 Cards)
+	# Metrics Grid Cards
 	var card_w = (size.x - 52.0) * 0.5
-	_draw_metric_card(Rect2(20.0, 480.0, card_w, 82.0), "💧 HUMIDITY", "%d%%" % humidity, "Dew point normal")
-	_draw_metric_card(Rect2(32.0 + card_w, 480.0, card_w, 82.0), "💨 WIND", "%.1f km/h" % wind_speed, "Light breeze")
+	_draw_metric_card(Rect2(20.0, 480.0, card_w, 82.0), "💧 HUMIDITY", "%d%%" % humidity, "Normal levels")
+	_draw_metric_card(Rect2(32.0 + card_w, 480.0, card_w, 82.0), "💨 WIND", "%.1f km/h" % wind_speed, "Breeze active")
 	_draw_metric_card(Rect2(20.0, 574.0, card_w, 82.0), "☀️ UV INDEX", "%d of 10" % uv_index, "Low risk")
 	_draw_metric_card(Rect2(32.0 + card_w, 574.0, card_w, 82.0), "🍃 AIR QUALITY", air_quality, "Satisfactory")
 
